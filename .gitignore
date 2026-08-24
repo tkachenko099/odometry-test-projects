@@ -1,0 +1,38 @@
+# ROS 2 / colcon
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ros2_ws/**/*.log
+
+# C++/CMake
+build/
+**/CMakeCache.txt
+**/CMakeFiles/
+compile_commands.json
+
+# Third-party (cloned by the devcontainer bootstrap)
+third_party/KF-GINS/
+
+# Experiment outputs
+experiments/results/*
+!experiments/results/.gitkeep
+datasets/simulated/*
+datasets/rosbags/*
+datasets/reference/*
+!datasets/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+
+# Unnecessary files
+*.pdf 

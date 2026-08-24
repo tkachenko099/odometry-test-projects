@@ -1,0 +1,18 @@
+# Keep the build context small & reproducible.
+.git
+.github
+**/build/
+**/install/
+**/log/
+**/__pycache__/
+**/*.pyc
+.venv/
+venv/
+third_party/KF-GINS/
+datasets/rosbags/
+experiments/results/
+*.bag
+*.mcap
+*.png
+*.pdf
+.DS_Store

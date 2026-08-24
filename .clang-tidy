@@ -1,0 +1,19 @@
+---
+# Static analysis profile for the C++20/23 navigation code.
+Checks: >
+  -*,
+  bugprone-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  concurrency-*,
+  misc-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers,
+  -misc-non-private-member-variables-in-classes
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*(ros2_ws/src|third_party/(?!KF-GINS)).*'
+FormatStyle: file

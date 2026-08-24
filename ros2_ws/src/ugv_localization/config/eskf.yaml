@@ -1,0 +1,16 @@
+eskf_node:
+  ros__parameters:
+    use_sim_time: true
+    wheel_radius: 0.10
+    wheel_track: 0.36
+    wheel_speed_std: 0.05
+    frame_id: "map"
+    child_frame_id: "base_footprint"
+    # Continuous IMU noise densities.
+    accel_noise: 0.02
+    gyro_noise: 0.002
+    accel_bias_walk: 1.0e-4
+    gyro_bias_walk: 1.0e-5
+    # Initial uncertainty.
+    init_pos_std: 1.0
+    init_vel_std: 0.5

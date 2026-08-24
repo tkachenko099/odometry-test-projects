@@ -1,0 +1,98 @@
+{
+  "name": "UGV GNSS/INS Navigation Stand (ROS 2 Jazzy + Gazebo Harmonic)",
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile",
+    "args": {
+      "USERNAME": "dev",
+      "USER_UID": "1000",
+      "USER_GID": "1000",
+      "LLVM_VERSION": "19"
+    }
+  },
+
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+
+  "remoteUser": "dev",
+  "containerUser": "dev",
+  "updateRemoteUserUID": true,
+  "overrideCommand": true,
+
+  // --- GUI (Gazebo GUI / RViz2 / Dash browser) passthrough -------------------
+  // Intel/AMD/software rendering works out of the box via /dev/dri.
+  // For NVIDIA, install nvidia-container-toolkit and add "--gpus=all" here.
+  "runArgs": [
+    "--name=ugv-nav-devcontainer",
+    "--network=host",
+    "--ipc=host",
+    "--privileged",
+    "-e", "DISPLAY=${localEnv:DISPLAY}",
+    "-e", "QT_X11_NO_MITSHM=1",
+    "-e", "NVIDIA_DRIVER_CAPABILITIES=all",
+    "-e", "NVIDIA_VISIBLE_DEVICES=all"
+  ],
+
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
+    "source=/dev/dri,target=/dev/dri,type=bind,consistency=cached",
+    "source=ugv-build-cache,target=/workspace/ros2_ws/build,type=volume",
+    "source=ugv-ccache,target=/home/dev/.cache,type=volume"
+  ],
+
+  "containerEnv": {
+    "ROS_DISTRO": "jazzy",
+    "GZ_VERSION": "harmonic",
+    "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
+    "ROS_LOCALHOST_ONLY": "0",
+    "LIBGL_ALWAYS_SOFTWARE": "0"
+  },
+
+  // Clone KF-GINS, scaffold the workspace tree and wire up rosdep once.
+  "onCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "sudo chown -R dev:dev /workspace/ros2_ws/build /home/dev/.cache 2>/dev/null || true",
+
+  "features": {},
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "C_Cpp.intelliSenseEngine": "disabled",
+        "clangd.arguments": [
+          "--background-index",
+          "--clang-tidy",
+          "--header-insertion=iwyu",
+          "--compile-commands-dir=${workspaceFolder}"
+        ],
+        "cmake.generator": "Ninja",
+        "cmake.configureArgs": [
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+        ],
+        "editor.formatOnSave": true,
+        "[cpp]": { "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd" },
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "files.associations": {
+          "*.repos": "yaml",
+          "*.sdf": "xml",
+          "*.urdf": "xml",
+          "*.xacro": "xml"
+        }
+      },
+      "extensions": [
+        "ms-vscode.cpptools",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-iot.vscode-ros",
+        "redhat.vscode-yaml",
+        "redhat.vscode-xml",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens"
+      ]
+    }
+  }
+}

@@ -1,0 +1,10 @@
+experiment:
+  id: E03_gnss_noise_high
+  description: "High GNSS position noise"
+  seed: 42
+  duration: 60.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    gnss:
+      noise_std: 2.5

@@ -1,0 +1,14 @@
+experiment:
+  id: E06_gnss_outage_60s
+  description: "60 s GNSS outage (dead-reckoning stress test)"
+  seed: 42
+  duration: 70.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    gnss:
+      noise_std: 0.5
+      outage:
+        enabled: true
+        start: 5.0
+        duration: 60.0

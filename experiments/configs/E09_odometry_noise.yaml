@@ -1,0 +1,12 @@
+experiment:
+  id: E09_odometry_noise
+  description: "Wheel-odometry velocity noise"
+  seed: 42
+  duration: 60.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    gnss:
+      noise_std: 0.5
+    odometry:
+      noise_std: 0.1

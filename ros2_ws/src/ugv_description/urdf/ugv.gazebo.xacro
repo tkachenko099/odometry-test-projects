@@ -1,0 +1,87 @@
+<?xml version="1.0"?>
+<!-- Gazebo Harmonic (gz-sim8) system plugins and sensors for the UGV.
+     Publishes onto Gazebo Transport topics that ros_gz_bridge maps to ROS 2. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="ugv_gazebo" params="update_rate wheel_track wheel_radius">
+
+    <!-- Differential drive: consumes cmd_vel, actuates the wheel joints. -->
+    <gazebo>
+      <plugin filename="gz-sim-diff-drive-system"
+              name="gz::sim::systems::DiffDrive">
+        <left_joint>left_wheel_joint</left_joint>
+        <right_joint>right_wheel_joint</right_joint>
+        <wheel_separation>${wheel_track}</wheel_separation>
+        <wheel_radius>${wheel_radius}</wheel_radius>
+        <max_linear_acceleration>2.0</max_linear_acceleration>
+        <topic>cmd_vel</topic>
+        <odom_topic>wheel/odometry</odom_topic>
+        <tf_topic>wheel/tf</tf_topic>
+        <frame_id>odom</frame_id>
+        <child_frame_id>base_footprint</child_frame_id>
+        <odom_publish_frequency>50</odom_publish_frequency>
+      </plugin>
+
+      <!-- Joint states (wheel angles / velocities for wheel-odometry node). -->
+      <plugin filename="gz-sim-joint-state-publisher-system"
+              name="gz::sim::systems::JointStatePublisher">
+        <topic>joint_states</topic>
+        <joint_name>left_wheel_joint</joint_name>
+        <joint_name>right_wheel_joint</joint_name>
+      </plugin>
+
+      <!-- Independent ground-truth odometry (Section 6). NOT fed to the ESKF. -->
+      <plugin filename="gz-sim-odometry-publisher-system"
+              name="gz::sim::systems::OdometryPublisher">
+        <odom_frame>map</odom_frame>
+        <robot_base_frame>base_footprint</robot_base_frame>
+        <odom_topic>ground_truth/odom</odom_topic>
+        <dimensions>3</dimensions>
+        <odom_publish_frequency>100</odom_publish_frequency>
+      </plugin>
+
+      <!-- Sensor system runs the IMU + NavSat below. -->
+      <plugin filename="gz-sim-sensors-system"
+              name="gz::sim::systems::Sensors">
+        <render_engine>ogre2</render_engine>
+      </plugin>
+
+      <plugin filename="gz-sim-navsat-system"
+              name="gz::sim::systems::NavSat"/>
+    </gazebo>
+
+    <!-- IMU sensor on imu_link. Noise is added by the fault injector in ROS,
+         so the raw sensor here is (near) ideal. -->
+    <gazebo reference="imu_link">
+      <sensor name="imu_sensor" type="imu">
+        <always_on>1</always_on>
+        <update_rate>${update_rate}</update_rate>
+        <topic>imu/data</topic>
+        <gz_frame_id>imu_link</gz_frame_id>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian"><mean>0.0</mean><stddev>1e-4</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0.0</mean><stddev>1e-4</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0.0</mean><stddev>1e-4</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><mean>0.0</mean><stddev>1e-3</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0.0</mean><stddev>1e-3</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0.0</mean><stddev>1e-3</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </gazebo>
+
+    <!-- GNSS receiver on gps_link -> NavSat fix. -->
+    <gazebo reference="gps_link">
+      <sensor name="navsat_sensor" type="navsat">
+        <always_on>1</always_on>
+        <update_rate>10</update_rate>
+        <topic>navsat</topic>
+        <gz_frame_id>gps_link</gz_frame_id>
+      </sensor>
+    </gazebo>
+
+  </xacro:macro>
+</robot>

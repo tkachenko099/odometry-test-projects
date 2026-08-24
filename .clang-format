@@ -1,0 +1,15 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 100
+IndentWidth: 4
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: false
+IncludeBlocks: Regroup
+PointerAlignment: Left
+SpaceAfterTemplateKeyword: true
+SortIncludes: CaseInsensitive

@@ -1,0 +1,14 @@
+experiment:
+  id: E04_gnss_outage_10s
+  description: "10 s GNSS outage mid-route"
+  seed: 42
+  duration: 60.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    gnss:
+      noise_std: 0.5
+      outage:
+        enabled: true
+        start: 25.0
+        duration: 10.0

@@ -1,0 +1,13 @@
+experiment:
+  id: E07_imu_noise
+  description: "Increased IMU white noise"
+  seed: 42
+  duration: 60.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    imu:
+      accel_noise_std: 0.2
+      gyro_noise_std: 0.02
+    gnss:
+      noise_std: 0.5

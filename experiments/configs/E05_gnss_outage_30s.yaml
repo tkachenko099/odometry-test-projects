@@ -1,0 +1,14 @@
+experiment:
+  id: E05_gnss_outage_30s
+  description: "30 s GNSS outage"
+  seed: 42
+  duration: 65.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    gnss:
+      noise_std: 0.5
+      outage:
+        enabled: true
+        start: 20.0
+        duration: 30.0

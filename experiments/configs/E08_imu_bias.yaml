@@ -1,0 +1,13 @@
+experiment:
+  id: E08_imu_bias
+  description: "Constant IMU accelerometer/gyro bias"
+  seed: 42
+  duration: 60.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    imu:
+      accel_noise_std: 0.02
+      gyro_noise_std: 0.002
+      accel_bias: 0.3
+      gyro_bias: 0.02

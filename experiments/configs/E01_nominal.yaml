@@ -1,0 +1,16 @@
+experiment:
+  id: E01_nominal
+  description: "Nominal run, no injected faults"
+  seed: 42
+  duration: 60.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    imu:
+      accel_noise_std: 0.0
+      gyro_noise_std: 0.0
+    gnss:
+      noise_std: 0.0
+    odometry:
+      noise_std: 0.0
+      scale_factor: 1.0

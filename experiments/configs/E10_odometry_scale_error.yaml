@@ -1,0 +1,13 @@
+experiment:
+  id: E10_odometry_scale_error
+  description: "Wheel-odometry scale-factor error (e.g. wrong radius)"
+  seed: 42
+  duration: 60.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    gnss:
+      noise_std: 0.5
+    odometry:
+      noise_std: 0.02
+      scale_factor: 1.1

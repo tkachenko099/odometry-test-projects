@@ -1,0 +1,21 @@
+experiment:
+  id: E12_gnss_outage_wheel_slip
+  description: "Combined failure: GNSS outage + wheel slip"
+  seed: 42
+  duration: 65.0
+  baseline: true
+fault_injector_node:
+  ros__parameters:
+    gnss:
+      noise_std: 0.5
+      outage:
+        enabled: true
+        start: 25.0
+        duration: 30.0
+    odometry:
+      noise_std: 0.02
+      slip:
+        enabled: true
+        start: 30.0
+        duration: 10.0
+        factor: 0.3
