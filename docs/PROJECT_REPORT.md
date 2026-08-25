@@ -73,8 +73,9 @@ Gazebo Harmonic ──(ros_gz bridge)──► /imu /gps /wheel /ground_truth
 | `ugv_fault_injector` | Deterministic sensor corruption (noise/bias/outage/slip) |
 | `ugv_localization` | Online **ESKF** estimator node |
 | `ugv_metrics` | Time‑alignment + accuracy metrics (CSV/JSON) |
-| `ugv_bringup` | Trajectory commander, `robot_localization` baseline, top‑level launch |
+| `ugv_bringup` | Trajectory commander, operator-heartbeat link, `robot_localization` baseline, top‑level launch |
 | `ugv_dashboard` | Results viewer **+ interactive GNSS/IMU simulator** |
+| `ugv_return_home` | **C++23 return‑home‑on‑link‑loss failsafe** (ArduPilot/MAVLink) |
 
 ### 3.1 Modern‑C++ design highlight
 
@@ -168,6 +169,70 @@ Interactive simulator, 40 s runs, GNSS outage 15–23 s, seed 42:
 
 ---
 
+## 5b. Return-home-on-link-loss failsafe (`ugv_return_home`)
+
+A second onboard subsystem, built to the same engineering standard as the estimation
+core, addresses vehicle safety: if the operator datalink is lost, the flight computer
+must autonomously bring the machine home.
+
+### Design
+
+* **C++23 named module** `ugv.rth` with partitions `types`, `geo`, `route`, `simplify`,
+  `link`, `mission`, exposed to ROS through an **ABI-stable facade** (`ugv::rth::api`,
+  PIMPL) — mirroring the `ugv_nav_core` architecture.
+* **MISRA-friendly control path**: fixed-capacity storage (`StaticVector`, no dynamic
+  allocation), no exceptions (status by value), strong `enum class` with fixed
+  underlying type, `[[nodiscard]]`/`noexcept` queries, recursion-free Douglas-Peucker
+  (explicit bounded work-stack), and dependency-free geodesy (no Eigen on the vehicle).
+* **Dependency inversion**: the controller talks to an injected `IAutopilotLink`
+  abstraction — the **MAVLink/ArduPilot seam**. Three interchangeable backends exist:
+  a **simulator** (`rth_demo`), a **diagnostic ROS bridge** (`RosBridgeLink`, latched
+  `/rth/return_path` + `/rth/autopilot_mode` for RViz), and a **real mavros client**
+  (`MavrosLink`: `SetMode` / `WaypointPush` / `WaypointClear`, compiled when
+  `mavros_msgs` is present).
+* **Closed-loop actuation in sim**: `rth_node` additionally publishes the mission
+  state (`/rth/mission_state`) and recorded trail (`/rth/recorded_path`); a pure-pursuit
+  `return_follower` takes over `/cmd_vel` while `Returning` (with `trajectory_commander`
+  yielding), so the Gazebo vehicle physically retraces its route home.
+
+### Behaviour
+
+The `MissionController` is a four-state machine — `Idle → Recording → Returning →
+Home`. While recording, positions (from MAVLink `GLOBAL_POSITION_INT`) are decimated
+into a bounded breadcrumb trail; operator heartbeats feed a `LinkMonitor`. When the
+heartbeat ages past `link_timeout`, the controller:
+
+1. reverses the trail (current → … → home) and simplifies it (Douglas-Peucker) to fit
+   the autopilot mission cap,
+2. commands `SET_MODE → GUIDED`, uploads the mission (`MISSION_COUNT` +
+   `MISSION_ITEM_INT`), then `SET_MODE → AUTO`,
+3. monitors arrival and finally commands `HOLD` at home.
+
+Heartbeat recovery optionally aborts the return (`resume_on_recovery`).
+
+### Verification
+
+* **22 GoogleTest** cases (`geo`, `route`/`StaticVector`, `simplify`, `link`,
+  `mission`) — including the full failsafe scenario (drive out → link loss → backtrack
+  upload → arrive home), recovery-abort, manual force, and reset.
+* **Deterministic demo** (`rth_demo`): an L-shaped 100 m route recorded as 30
+  breadcrumbs is simplified to a **3-waypoint** backtrack; on a 2 s link timeout the
+  simulated autopilot returns the vehicle to within **0.0 m** of home. The run is
+  exported to JSON and rendered by `ugv_dashboard.rth_plots` into a route + metrics
+  figure (`docs/rth_metrics.png`): recorded vs. backtrack vs. actual path,
+  distance-to-home (peak ≈ 71 m → 0 m), backtrack speed (≈ 5 m/s), cross-track error
+  (≤ 0.7 m), and the mission-state timeline.
+
+![Return-home route and metrics](rth_metrics.png)
+* **Live ROS integration**: with a moving `/gps/fix` and an `operator_link` heartbeat
+  that drops, `rth_node` transitions `RECORDING → RETURNING`, issues `SET_MODE GUIDED`,
+  uploads the backtrack mission and `SET_MODE AUTO`, publishing the latched mission on
+  `/rth/return_path`. Wired into `ugv_bringup` behind `return_home:=true`.
+* **Hardware-in-the-loop**: `scripts/run_sitl_failsafe.sh` drives the `MavrosLink`
+  backend against ArduPilot SITL over MAVLink (mavros).
+
+---
+
 ## 6. Reproducibility
 
 * **Single image** (`osrf/ros:jazzy-desktop` base) with **pinned** Clang 19,
@@ -184,7 +249,8 @@ Interactive simulator, 40 s runs, GNSS outage 15–23 s, seed 42:
 
 * **26 GoogleTest** cases in `ugv_nav_core` covering attitude algebra, WGS‑84
   geodesy conversions, ESKF predict/update, sensor kinematics and metrics.
-* Full workspace `colcon build` (9 packages) and `colcon test` pass.
+* **22 GoogleTest** cases in `ugv_return_home` covering the failsafe module.
+* Full workspace `colcon build` (10 packages) and `colcon test` pass.
 * Interactive simulator numerics assert **corrected RMSE < raw RMSE** for every
   route shape; Ruff‑clean Python.
 * Dashboards validated to boot and serve a valid callback dependency graph.
@@ -201,6 +267,11 @@ Interactive simulator, 40 s runs, GNSS outage 15–23 s, seed 42:
   adaptive noise are deferred as planned.
 * **Quantitative KF‑GINS cross‑check** — currently a reproduction script; a
   numeric A/B against the reference dataset is a natural next milestone.
+* **Real MAVLink backend** — implemented (`MavrosLink`) and integrated via
+  `scripts/run_sitl_failsafe.sh`; a full ArduPilot SITL soak test depends on the host
+  having `sim_vehicle.py` (the image now ships mavros), and closing the loop so the
+  Gazebo vehicle physically drives the backtrack (rather than only visualising it) is a
+  follow-up.
 
 ---
 

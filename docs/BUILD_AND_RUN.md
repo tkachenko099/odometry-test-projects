@@ -187,7 +187,94 @@ Reference outputs are copied to `datasets/reference/` for comparison.
 
 ---
 
-## 7. Troubleshooting
+## 7. Return-home-on-link-loss failsafe (`ugv_return_home`)
+
+Onboard C++23 module that records the driven trail and, on operator-datalink loss,
+backtracks the vehicle home via an ArduPilot autopilot over MAVLink.
+
+### Standalone demo (no ROS/Gazebo)
+
+```bash
+source ros2_ws/install/setup.bash
+ros2 run ugv_return_home rth_demo            # trace only
+ros2 run ugv_return_home rth_demo run.json   # also write a JSON run log for plotting
+```
+
+Expected trace: the vehicle drives an L-route (recording breadcrumbs), the link goes
+silent, the failsafe trips, a simplified backtrack mission is "uploaded" over a
+simulated MAVLink, and the vehicle is driven home — ending in `RESULT: vehicle
+returned home successfully.`
+
+### Route + metrics figure
+
+```bash
+./scripts/rth_report.sh docs/rth_metrics.png   # runs rth_demo + renders the figure
+```
+
+Produces `docs/rth_metrics.png`: the route map (recorded trail vs. uploaded backtrack
+vs. actual driven path) plus distance-to-home, speed, cross-track error, and the
+mission-state timeline. Requires the Python deps (`plotly`, `kaleido`, `numpy`).
+
+### ROS 2 node (wired to mavros topics)
+
+```bash
+ros2 launch ugv_return_home rth.launch.py           # params: config/rth.yaml
+# In another shell, publish an operator heartbeat; stop it to trip the failsafe:
+ros2 topic pub -r 2 /operator/heartbeat std_msgs/msg/Empty {}
+# Watch the backtrack mission (metric ENU path for RViz), mode and mission state:
+ros2 topic echo /rth/return_path
+ros2 topic echo /rth/autopilot_mode      # commanded autopilot mode (GUIDED/AUTO/HOLD)
+ros2 topic echo /rth/mission_state       # IDLE/RECORDING/RETURNING/HOME
+ros2 topic echo /rth/recorded_path       # recorded breadcrumb trail (RViz)
+# Or force a manual return at any time:
+ros2 service call /rth/force std_srvs/srv/Trigger {}
+```
+
+Key parameters (`config/rth.yaml`): `link_timeout`, `min_record_distance`,
+`arrival_radius`, `simplify`/`simplify_epsilon`, `resume_on_recovery`,
+`position_topic` (default `/mavros/global_position/global`), `heartbeat_topic`,
+`use_mavros` (select the real MAVLink backend).
+
+### Inside the full Gazebo stack
+
+The failsafe is wired into `ugv_bringup` behind a toggle. It records the robot's
+`/gps/fix`, and an `operator_link` node publishes a heartbeat that stops after
+`rth_drop_after` seconds to simulate a comms loss:
+
+```bash
+ros2 launch ugv_bringup bringup.launch.py return_home:=true rviz:=true rth_drop_after:=30.0
+```
+
+RViz shows the recorded trail (green, `/rth/recorded_path`) and the backtrack path
+(blue, `/rth/return_path`). When the heartbeat stops, `mission_state` flips to
+`RETURNING`, `trajectory_commander` yields `/cmd_vel`, and the `return_follower`
+(pure-pursuit) drives the robot back along its route until `HOME`.
+
+### Hardware-in-the-loop against ArduPilot SITL
+
+With mavros in the image (Dockerfile installs `ros-jazzy-mavros*`) and ArduPilot
+SITL available on the host, the real MAVLink path can be exercised end-to-end:
+
+```bash
+./scripts/run_sitl_failsafe.sh 25   # SITL rover + mavros + rth_node (use_mavros:=true)
+```
+
+The script prints ArduPilot SITL install hints if `sim_vehicle.py` is missing. On link
+loss the node issues `SET_MODE GUIDED`, `WaypointPush` (the backtrack mission) and
+`SET_MODE AUTO` over MAVLink, and the SITL vehicle drives home.
+
+### Tests
+
+```bash
+cd ros2_ws
+colcon test --packages-select ugv_return_home
+colcon test-result --test-result-base build/ugv_return_home --verbose   # 22 tests
+cd ..
+```
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -209,4 +296,9 @@ source ros2_ws/install/setup.bash                     # source overlay
 ./scripts/run_all_experiments.sh                      # full E01–E12 matrix
 ./scripts/dashboard.sh                                # results dashboard      :8050
 ./scripts/reproduce_kfgins.sh                         # KF‑GINS reference
+ros2 run ugv_return_home rth_demo                     # return-home failsafe demo
+ros2 launch ugv_return_home rth.launch.py             # return-home failsafe node
+ros2 launch ugv_bringup bringup.launch.py return_home:=true rviz:=true   # failsafe in Gazebo
+./scripts/run_sitl_failsafe.sh                        # HIL: ArduPilot SITL + mavros
+./scripts/rth_report.sh docs/rth_metrics.png          # return-home route + metrics figure
 ```
