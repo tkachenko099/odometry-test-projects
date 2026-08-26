@@ -20,6 +20,7 @@ setup(
         "console_scripts": [
             "dashboard = ugv_dashboard.app:main",
             "sim-dashboard = ugv_dashboard.interactive:main",
+            "rth-plots = ugv_dashboard.rth_plots:main",
         ],
     },
 )

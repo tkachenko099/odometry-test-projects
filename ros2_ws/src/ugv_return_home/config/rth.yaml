@@ -1,0 +1,19 @@
+rth_node:
+  ros__parameters:
+    # --- Trail recording ---
+    min_record_distance: 1.0     # [m] breadcrumb decimation distance
+    arrival_radius: 2.0          # [m] "home reached" tolerance
+
+    # --- Operator datalink failsafe ---
+    link_timeout: 3.0            # [s] heartbeat age that trips the return
+    resume_on_recovery: true     # abort the return if the operator link returns
+
+    # --- Return mission ---
+    simplify: true               # Douglas-Peucker the trail before upload
+    simplify_epsilon: 0.75       # [m] simplification tolerance
+
+    # --- IO ---
+    tick_rate: 5.0               # [Hz] failsafe evaluation rate
+    frame_id: "map"
+    position_topic: "/mavros/global_position/global"
+    heartbeat_topic: "/operator/heartbeat"

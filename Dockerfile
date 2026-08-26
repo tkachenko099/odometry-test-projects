@@ -94,9 +94,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-rmw-cyclonedds-cpp \
         ros-jazzy-nav-msgs ros-jazzy-sensor-msgs ros-jazzy-geometry-msgs \
         ros-jazzy-rviz2 \
+        ros-jazzy-mavros ros-jazzy-mavros-msgs ros-jazzy-mavros-extras \
         ros-dev-tools python3-colcon-common-extensions python3-colcon-mixin \
         python3-rosdep python3-vcstool \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ( geographiclib-get-geoids egm96-5 || true )
 
 # ---- Non-root developer user -------------------------------------------------
 # The Noble base already ships a uid=1000 "ubuntu" account; rename/relocate it
