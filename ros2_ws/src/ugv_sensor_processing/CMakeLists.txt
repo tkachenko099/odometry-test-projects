@@ -4,6 +4,15 @@ project(ugv_sensor_processing CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# --- Quality gate: warnings on everywhere, errors on request (CI sets it) ----
+option(UGV_WERROR "Treat compiler warnings as errors" OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  add_compile_options(-Wall -Wextra -Wpedantic -Wshadow -Wconversion)
+  if(UGV_WERROR)
+    add_compile_options(-Werror)
+  endif()
+endif()
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)

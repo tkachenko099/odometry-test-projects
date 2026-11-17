@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ugv_return_home</name>
+  <version>0.1.0</version>
+  <description>
+    C++23 module-based onboard return-home failsafe: records the driven trail
+    and, on operator datalink loss, backtracks the vehicle to its launch point
+    by commanding an ArduPilot autopilot via MAVLink (mavros seam). MISRA-friendly
+    core with GoogleTest coverage.
+  </description>
+  <maintainer email="dev@example.com">UGV Nav Stand</maintainer>
+  <license>GPL-3.0-only</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <!-- Optional: enables the real MAVLink backend (ArduPilot SITL / HIL).
+       Detected via find_package(mavros_msgs QUIET); build works without it. -->
+  <exec_depend>mavros_msgs</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

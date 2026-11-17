@@ -40,7 +40,8 @@ struct EskfParams {
     Scalar gyro_bias_walk{1.0e-5};
     Scalar init_pos_std{1.0};
     Scalar init_vel_std{0.5};
-    Scalar init_att_std_deg{5.0};
+    Scalar init_att_std_deg{5.0};  ///< Roll/pitch prior [deg]
+    Scalar init_yaw_std_deg{5.0};  ///< Heading prior [deg]; open it up if yaw is unknown
     Scalar init_ba_std{0.1};
     Scalar init_bg_std{0.01};
     Vec3 gravity{0.0, 0.0, 9.80665};
@@ -60,6 +61,12 @@ public:
     void predict(const Vec3& accel, const Vec3& gyro, Scalar t, Scalar dt);
     void updateGnssNed(const Vec3& p_ned, const Vec3& std_ned);
     void updateWheelSpeed(Scalar v_forward, Scalar std_v);
+    /// Wheeled-vehicle constraint: zero lateral / vertical body velocity.
+    void updateNonHolonomic(Scalar std_lateral, Scalar std_vertical);
+    /// Coarse alignment: set the NED heading [rad] (0 = North, clockwise), the
+    /// horizontal speed along it, and the heading 1-sigma [rad].
+    void alignHeading(Scalar heading, Scalar speed, Scalar std_heading);
+    [[nodiscard]] Scalar headingStd() const;  ///< Heading 1-sigma [rad]
 
     [[nodiscard]] NavState state() const;
     [[nodiscard]] Eigen::Matrix<Scalar, 15, 15> covariance() const;

@@ -4,8 +4,18 @@ eskf_node:
     wheel_radius: 0.10
     wheel_track: 0.36
     wheel_speed_std: 0.05
+    # Non-holonomic constraint: zero lateral / vertical *body* velocity.
+    nhc_std: 0.1                 # [m/s] lateral; <=0 disables the constraint
+    # Looser vertically: under drive torque this chassis pitches up to ~0.2 rad
+    # against the ground, so body-z really sees up to v*sin(pitch) ~ 0.2 m/s.
+    nhc_vertical_std: 0.3        # [m/s]
     frame_id: "map"
     child_frame_id: "base_footprint"
+    # Map datum [lat_deg, lon_deg, alt_m] of the local frame origin. Here: the
+    # Gazebo world origin (ugv_world.sdf spherical_coordinates) plus the GNSS
+    # antenna height above the ground (0.21 m). Leave empty ([]) to use the
+    # first fix instead - its noise then offsets the whole track.
+    datum: [30.5278, 114.3556, 20.21]
     # Continuous IMU noise densities.
     accel_noise: 0.02
     gyro_noise: 0.002
@@ -14,3 +24,13 @@ eskf_node:
     # Initial uncertainty.
     init_pos_std: 1.0
     init_vel_std: 0.5
+    init_att_std_deg: 5.0        # roll/pitch (levelling) prior
+    # Heading. Position-only GNSS cannot observe yaw at rest, so give the start
+    # heading as a ROS/ENU yaw (0 = East, which is the Gazebo spawn pose) with
+    # an honest 1-sigma. A std of 45 deg or more means "unknown": the node then
+    # ignores init_yaw_deg and aligns to the GNSS course over ground after the
+    # vehicle has rolled `align_distance` metres.
+    init_yaw_deg: 0.0
+    init_yaw_std_deg: 10.0
+    align_distance: 3.0          # [m] GNSS baseline for course-over-ground alignment
+    align_min_speed: 0.3         # [m/s] wheel speed that counts as "rolling"

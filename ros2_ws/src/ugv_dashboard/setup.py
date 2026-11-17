@@ -11,6 +11,7 @@ setup(
         ("share/" + package_name, ["package.xml"]),
     ],
     install_requires=["setuptools"],
+    tests_require=["pytest"],
     zip_safe=True,
     maintainer="UGV Nav Stand",
     maintainer_email="dev@example.com",
@@ -20,6 +21,7 @@ setup(
         "console_scripts": [
             "dashboard = ugv_dashboard.app:main",
             "sim-dashboard = ugv_dashboard.interactive:main",
+            "rth-plots = ugv_dashboard.rth_plots:main",
         ],
     },
 )

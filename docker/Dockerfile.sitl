@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1.7
+###############################################################################
+# Optional add-on image: the dev image + ArduPilot Rover SITL, for the
+# hardware-in-the-loop return-home test (scripts/run_sitl_failsafe.sh).
+#
+#   docker build -t ugv-nav-stand:jazzy-harmonic .
+#   docker build -t ugv-nav-stand:sitl -f docker/Dockerfile.sitl .
+#   docker compose run --rm sitl ./scripts/run_sitl_failsafe.sh
+#
+# Kept out of the main image: the ArduPilot tree adds several GB and ~15 min.
+###############################################################################
+FROM ugv-nav-stand:jazzy-harmonic
+
+# A release tag, pinned for reproducibility.
+ARG ARDUPILOT_REF=Rover-4.6.3
+ENV ARDUPILOT_HOME=/opt/ardupilot
+
+USER root
+RUN mkdir -p "${ARDUPILOT_HOME}" && chown 1000:1000 "${ARDUPILOT_HOME}" \
+    && ( geographiclib-get-geoids egm96-5 || true ) \
+    # Python bits waf / sim_vehicle.py need (empy 3.3.4 already ships with ROS).
+    && /opt/venv/bin/pip install --no-cache-dir pymavlink pexpect future
+USER 1000
+
+RUN git clone --depth 1 --branch "${ARDUPILOT_REF}" \
+        --recurse-submodules --shallow-submodules \
+        https://github.com/ArduPilot/ardupilot.git "${ARDUPILOT_HOME}"
+
+# ArduPilot is built with GCC; the image-wide CC/CXX=clang is for our own code.
+RUN cd "${ARDUPILOT_HOME}" \
+    && CC=gcc CXX=g++ ./waf configure --board sitl \
+    && CC=gcc CXX=g++ ./waf rover
+
+ENV PATH="${ARDUPILOT_HOME}/Tools/autotest:${PATH}"

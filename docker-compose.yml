@@ -3,7 +3,7 @@
 #   Allow local X clients once:  xhost +local:docker
 #   Interactive dev shell:       docker compose run --rm dev
 #   Full experiment (headless):  docker compose run --rm dev \
-#                                  ./scripts/run_experiment.sh configs/gnss_outage_30s.yaml
+#                                  ./scripts/run_experiment.sh configs/E05_gnss_outage_30s.yaml --headless
 services:
   dev:
     build:
@@ -45,6 +45,18 @@ services:
     #           capabilities: [gpu]
     working_dir: /workspace
     command: bash
+
+  # Dev image + ArduPilot Rover SITL, for the return-home HIL test:
+  #   docker compose build dev sitl
+  #   docker compose run --rm sitl ./scripts/run_sitl_failsafe.sh
+  sitl:
+    extends:
+      service: dev
+    build:
+      context: docker
+      dockerfile: Dockerfile.sitl
+    image: ugv-nav-stand:sitl
+    container_name: ugv-nav-stand-sitl
 
 volumes:
   ugv-build-cache:

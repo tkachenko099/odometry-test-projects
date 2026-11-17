@@ -55,14 +55,20 @@ source ros2_ws/install/setup.bash        # overlay the freshly built workspace
 ```
 
 `build.sh` runs `colcon build --symlink-install` and exports
-`compile_commands.json` for `clangd`.
+`compile_commands.json` for `clangd`. All C++ packages compile with
+`-Wall -Wextra -Wpedantic -Wshadow -Wconversion`; add `-DUGV_WERROR=ON` to turn
+warnings into errors, as CI does:
+
+```bash
+./scripts/build.sh -DUGV_WERROR=ON
+```
 
 ### Run the unit tests (GoogleTest)
 
 ```bash
 cd ros2_ws
 colcon test --packages-select ugv_nav_core
-colcon test-result --verbose             # 26 tests: math/geodesy, ESKF, sensors, metrics
+colcon test-result --verbose             # 29 tests: math/geodesy, ESKF, sensors, metrics
 cd ..
 ```
 
@@ -117,6 +123,25 @@ online ESKF, logs ground truth vs. estimate and computes metrics.
 
 Accepts an absolute path, a path relative to `experiments/`, or a bare config
 name. If the workspace is not built yet, the script builds it first.
+
+Useful flags (passed through to `experiments/run_experiment.py`):
+
+| Flag | Effect |
+|---|---|
+| `--headless` | Gazebo server only, off‑screen rendering — for containers/CI without a display |
+| `--no-bag` | skip the rosbag recording |
+| `--max-position-rmse M` | exit non‑zero unless the run's position RMSE is ≤ `M` metres (regression gate) |
+
+```bash
+./scripts/run_experiment.sh configs/E01_nominal.yaml --headless --no-bag --max-position-rmse 1.0
+```
+
+**Estimator configuration** lives in `ugv_localization/config/eskf.yaml`
+(override with `eskf_params_file:=…` on `bringup.launch.py`). The heading
+parameters matter most: `init_yaw_deg` is the start heading as a ROS/ENU yaw
+(0 = East, the Gazebo spawn pose) and `init_yaw_std_deg` how well it is known.
+Set the std to 45° or more to declare the heading unknown — the node then aligns
+to the GNSS course over ground after `align_distance` metres of travel.
 
 ### Run the whole matrix (E01–E12)
 
@@ -187,7 +212,116 @@ Reference outputs are copied to `datasets/reference/` for comparison.
 
 ---
 
-## 7. Troubleshooting
+## 7. Return-home-on-link-loss failsafe (`ugv_return_home`)
+
+Onboard C++23 module that records the driven trail and, on operator-datalink loss,
+backtracks the vehicle home via an ArduPilot autopilot over MAVLink.
+
+### Standalone demo (no ROS/Gazebo)
+
+```bash
+source ros2_ws/install/setup.bash
+ros2 run ugv_return_home rth_demo            # trace only
+ros2 run ugv_return_home rth_demo run.json   # also write a JSON run log for plotting
+```
+
+Expected trace: the vehicle drives an L-route (recording breadcrumbs), the link goes
+silent, the failsafe trips, a simplified backtrack mission is "uploaded" over a
+simulated MAVLink, and the vehicle is driven home — ending in `RESULT: vehicle
+returned home successfully.`
+
+### Route + metrics figure
+
+```bash
+./scripts/rth_report.sh docs/rth_metrics.png   # runs rth_demo + renders the figure
+```
+
+Produces `docs/rth_metrics.png`: the route map (recorded trail vs. uploaded backtrack
+vs. actual driven path) plus distance-to-home, speed, cross-track error, and the
+mission-state timeline. Requires the Python deps (`plotly`, `kaleido`, `numpy`).
+
+### ROS 2 node (wired to mavros topics)
+
+```bash
+ros2 launch ugv_return_home rth.launch.py           # params: config/rth.yaml
+# In another shell, publish an operator heartbeat; stop it to trip the failsafe:
+ros2 topic pub -r 2 /operator/heartbeat std_msgs/msg/Empty {}
+# Watch the backtrack mission (metric ENU path for RViz), mode and mission state:
+ros2 topic echo /rth/return_path
+ros2 topic echo /rth/autopilot_mode      # commanded autopilot mode (GUIDED/AUTO/HOLD)
+ros2 topic echo /rth/mission_state       # IDLE/RECORDING/RETURNING/HOME
+ros2 topic echo /rth/recorded_path       # recorded breadcrumb trail (RViz)
+# Or force a manual return at any time:
+ros2 service call /rth/force std_srvs/srv/Trigger {}
+# HOME is a terminal state (the vehicle is held there). Re-arm for a new sortie -
+# the next position fix becomes the new home:
+ros2 service call /rth/reset std_srvs/srv/Trigger {}
+```
+
+Key parameters (`config/rth.yaml`): `link_timeout`, `min_record_distance`,
+`arrival_radius`, `simplify`/`simplify_epsilon`, `resume_on_recovery`,
+`position_topic` (default `/mavros/global_position/global`), `heartbeat_topic`,
+`use_mavros` (select the real MAVLink backend).
+
+### Inside the full Gazebo stack
+
+The failsafe is wired into `ugv_bringup` behind a toggle. It records the robot's
+`/gps/fix`, and an `operator_link` node publishes a heartbeat that stops after
+`rth_drop_after` seconds to simulate a comms loss:
+
+```bash
+ros2 launch ugv_bringup bringup.launch.py return_home:=true rviz:=true rth_drop_after:=30.0
+```
+
+RViz shows the recorded trail (green, `/rth/recorded_path`) and the backtrack path
+(blue, `/rth/return_path`). When the heartbeat stops, `mission_state` flips to
+`RETURNING`, `trajectory_commander` yields `/cmd_vel`, and the `return_follower`
+(pure-pursuit) drives the robot back along its route until `HOME`.
+
+### Hardware-in-the-loop against ArduPilot SITL
+
+The real MAVLink path is exercised end-to-end against ArduPilot Rover SITL. The
+autopilot lives in an add-on image (`docker/Dockerfile.sitl`, ArduPilot
+Rover 4.6.3 on top of the dev image; several GB, ~15 min to build):
+
+```bash
+docker compose build dev sitl
+docker compose run --rm sitl bash -c './scripts/build.sh && ./scripts/run_sitl_failsafe.sh 25'
+```
+
+`run_sitl_failsafe.sh` starts the SITL rover, mavros (TCP 5760, MAVLink system
+id 255) and `rth_node` with `use_mavros:=true`, then runs a scripted operator
+(`scripts/sitl_operator.py`) that arms the rover, drives it out for the given
+number of seconds under RC override, cuts the operator heartbeat and watches the
+result. On link loss the node issues `SET_MODE GUIDED`, clears and uploads the
+backtrack mission, and switches to `AUTO` once the autopilot has accepted it;
+on arrival it commands `HOLD`. The script exits 0 only if the vehicle ends
+within 5 m of the launch point with the mission in `HOME`:
+
+```
+[operator] drove out to 163.3 m from the launch point (mission=RECORDING)
+[operator] DATALINK LOST: heartbeat stopped, sticks released
+[rth_node]: [mavros] mission accepted (22 items)
+[operator] final: mission=HOME mode=HOLD distance home=1.8 m (max 185.3 m)
+[operator] RESULT: PASS - vehicle backtracked home.
+```
+
+Logs go to `/tmp/ugv_sitl/{sitl,mavros,rth}.log` (override with `SITL_LOG_DIR`).
+Outside the image, build ArduPilot yourself and point `ARDUPILOT_HOME` at the
+tree; the script prints the steps if it cannot find the `ardurover` binary.
+
+### Tests
+
+```bash
+cd ros2_ws
+colcon test --packages-select ugv_return_home
+colcon test-result --test-result-base build/ugv_return_home --verbose   # 26 tests
+cd ..
+```
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -209,4 +343,9 @@ source ros2_ws/install/setup.bash                     # source overlay
 ./scripts/run_all_experiments.sh                      # full E01–E12 matrix
 ./scripts/dashboard.sh                                # results dashboard      :8050
 ./scripts/reproduce_kfgins.sh                         # KF‑GINS reference
+ros2 run ugv_return_home rth_demo                     # return-home failsafe demo
+ros2 launch ugv_return_home rth.launch.py             # return-home failsafe node
+ros2 launch ugv_bringup bringup.launch.py return_home:=true rviz:=true   # failsafe in Gazebo
+./scripts/run_sitl_failsafe.sh                        # HIL: ArduPilot SITL + mavros
+./scripts/rth_report.sh docs/rth_metrics.png          # return-home route + metrics figure
 ```

@@ -6,6 +6,14 @@
 set -e
 set -o pipefail
 
+# Named volumes (docker-compose: ros2_ws/build, ~/.cache) are created root-owned,
+# which makes `colcon build` fail with "Permission denied" for the dev user.
+for dir in /workspace/ros2_ws/build "${HOME}/.cache"; do
+    if [[ -d "${dir}" && ! -w "${dir}" ]]; then
+        sudo chown "$(id -u):$(id -g)" "${dir}" || true
+    fi
+done
+
 source /opt/ros/"${ROS_DISTRO:-jazzy}"/setup.bash
 
 if [[ -f /workspace/ros2_ws/install/setup.bash ]]; then

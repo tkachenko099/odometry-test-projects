@@ -5,7 +5,9 @@
 #
 # Accepts an absolute path, a path relative to experiments/, or a bare config
 # name resolved against experiments/configs/.
-set -euo pipefail
+# NOTE: ROS setup.bash reads unset variables (AMENT_TRACE_SETUP_FILES), so
+# nounset (`set -u`) must stay off while sourcing it.
+set -eo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARG="${1:-configs/E01_nominal.yaml}"; shift || true

@@ -1,0 +1,68 @@
+# Quality gate. Each job exists because the defect it guards against shipped
+# once: unrunnable entry-point scripts, a launch file that could not start, and
+# an estimator that diverged on fault-free data.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-sim:
+    runs-on: ubuntu-24.04
+    container: osrf/ros:jazzy-desktop
+    timeout-minutes: 45
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      LIBGL_ALWAYS_SOFTWARE: "1"   # Gazebo sensors render off-screen on the CPU
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            clang-18 clang-tools-18 ninja-build \
+            libeigen3-dev libgtest-dev nlohmann-json3-dev \
+            ros-jazzy-ros-gz ros-jazzy-robot-localization ros-jazzy-xacro \
+            ros-jazzy-robot-state-publisher ros-jazzy-mavros-msgs \
+            python3-colcon-common-extensions python3-yaml python3-matplotlib python3-pandas
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
+
+      - name: Shell scripts parse
+        run: |
+          for f in scripts/*.sh docker/entrypoint.sh; do bash -n "$f"; done
+
+      - name: Build (warnings are errors)
+        shell: bash
+        run: ./scripts/build.sh -DUGV_WERROR=ON
+
+      - name: MAVLink backend was compiled in
+        run: nm -C ros2_ws/build/ugv_return_home/rth_node | grep -q MavrosLink
+
+      - name: Unit tests
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ros2_ws
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose
+
+      - name: Simulation smoke test (E01 nominal, headless)
+        shell: bash
+        run: |
+          ./scripts/run_experiment.sh configs/E01_nominal.yaml \
+            --headless --no-bag --max-position-rmse 1.0
+
+      - name: Upload experiment artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e01-nominal
+          path: experiments/results/
+          if-no-files-found: ignore

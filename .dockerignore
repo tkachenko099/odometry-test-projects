@@ -16,3 +16,6 @@ experiments/results/
 *.png
 *.pdf
 .DS_Store
+**/.ruff_cache/
+**/.pytest_cache/
+**/.mypy_cache/

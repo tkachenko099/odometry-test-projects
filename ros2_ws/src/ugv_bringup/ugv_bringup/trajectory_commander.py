@@ -12,8 +12,9 @@ from dataclasses import dataclass
 
 import rclpy
 from geometry_msgs.msg import Twist
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,9 @@ class TrajectoryCommander(Node):
         self._rate: float = self.get_parameter("rate_hz").value
         self._cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self._done_pub = self.create_publisher(Bool, "/route/done", 1)
+        # Yield /cmd_vel to the return-home follower once a failsafe is active.
+        self._yielded = False
+        self.create_subscription(String, "/rth/mission_state", self._on_state, 10)
         self._t = 0.0
         self._idx = 0
         self._seg_t = 0.0
@@ -60,7 +64,21 @@ class TrajectoryCommander(Node):
             f"{sum(s.duration for s in ROUTE):.1f}s total."
         )
 
+    def _on_state(self, msg: String) -> None:
+        failsafe = msg.data in ("RETURNING", "HOME")
+        if failsafe and not self._yielded:
+            self._yielded = True
+            self._cmd_pub.publish(Twist())  # release with a stop command
+            self.get_logger().warn("return-home active: yielding /cmd_vel.")
+        elif not failsafe and self._yielded:
+            # Return aborted (link recovered) or mission reset: take /cmd_vel
+            # back and continue the route from where it was interrupted.
+            self._yielded = False
+            self.get_logger().info("return-home released: resuming the route.")
+
     def _tick(self) -> None:
+        if self._yielded:
+            return  # follower owns /cmd_vel during the return
         dt = 1.0 / self._rate
         msg = Twist()
         if self._idx < len(ROUTE):
@@ -85,11 +103,17 @@ def main() -> None:
     node = TrajectoryCommander()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C / launch shutdown: exit cleanly, not with a traceback
+    except Exception:
+        if rclpy.ok():
+            raise  # a real failure; a timer publish racing shutdown is not
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+            rclpy.try_shutdown()
+        except KeyboardInterrupt:
+            pass  # a second Ctrl-C arriving during teardown
 
 
 if __name__ == "__main__":

@@ -64,7 +64,8 @@ def _git_rev() -> str:
         return "unknown"
 
 
-def run(config_path: Path, results_root: Path, record_bag: bool, extra_time: float) -> Path:
+def run(config_path: Path, results_root: Path, record_bag: bool, extra_time: float,
+        headless: bool = False) -> Path:
     cfg = _load_config(config_path)
     exp = cfg.get("experiment", {})
     exp_id = exp.get("id") or config_path.stem
@@ -104,6 +105,7 @@ def run(config_path: Path, results_root: Path, record_bag: bool, extra_time: flo
         f"output_csv:={data_csv}",
         f"output_json:={metrics_json}",
         f"baseline:={'true' if baseline else 'false'}",
+        f"headless:={'true' if headless else 'false'}",
     ]
     print(f"[run] launching: {' '.join(launch_cmd)}", flush=True)
     launch = subprocess.Popen(launch_cmd, preexec_fn=os.setsid)
@@ -122,9 +124,12 @@ def run(config_path: Path, results_root: Path, record_bag: bool, extra_time: flo
         print("[run] interrupted; shutting down early", flush=True)
 
     # Graceful shutdown so the metrics node flushes its files.
+    # Signal only the session leaders: `ros2 launch` forwards SIGINT to its own
+    # children. Signalling the whole process group as well delivers it twice,
+    # and the second one lands in the middle of the nodes' teardown.
     for proc in (bag_proc, launch):
         if proc and proc.poll() is None:
-            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.send_signal(signal.SIGINT)
     for proc in (bag_proc, launch):
         if proc:
             try:
@@ -132,7 +137,10 @@ def run(config_path: Path, results_root: Path, record_bag: bool, extra_time: flo
             except subprocess.TimeoutExpired:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
 
-    _render_plots(result_dir)
+    try:
+        _render_plots(result_dir)
+    except ImportError as exc:  # plots are a convenience; metrics are the result
+        print(f"[run] plotting skipped ({exc}); pip install -r requirements.txt", flush=True)
     print(f"[run] artifacts written to {result_dir}", flush=True)
     return result_dir
 
@@ -155,7 +163,7 @@ def _render_plots(result_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.plot(df.gt_x, df.gt_y, label="Ground Truth", linewidth=2)
     ax.plot(df.est_x, df.est_y, "--", label="ESKF")
-    ax.set_xlabel("North [m]"); ax.set_ylabel("East [m]"); ax.axis("equal")
+    ax.set_xlabel("East [m]"); ax.set_ylabel("North [m]"); ax.axis("equal")
     ax.legend(); ax.set_title("Trajectory"); fig.tight_layout()
     fig.savefig(result_dir / "trajectory.png", dpi=120); plt.close(fig)
 
@@ -187,11 +195,33 @@ def main() -> None:
     parser.add_argument("--no-bag", action="store_true", help="skip rosbag recording")
     parser.add_argument("--extra-time", type=float, default=8.0,
                         help="settle/shutdown margin [s]")
+    parser.add_argument("--headless", action="store_true",
+                        help="run Gazebo server-only (no GUI), e.g. in CI / containers")
+    parser.add_argument("--max-position-rmse", type=float, default=None, metavar="M",
+                        help="exit non-zero unless the run's position RMSE is <= M metres")
     args = parser.parse_args()
 
     if not args.config.exists():
         sys.exit(f"config not found: {args.config}")
-    run(args.config, args.results_root, not args.no_bag, args.extra_time)
+    result_dir = run(args.config, args.results_root, not args.no_bag, args.extra_time,
+                     args.headless)
+
+    if args.max_position_rmse is not None:
+        _check_rmse(result_dir, args.max_position_rmse)
+
+
+def _check_rmse(result_dir: Path, limit: float) -> None:
+    """Regression gate: fail unless the run produced metrics within ``limit``."""
+    metrics_json = result_dir / "metrics.json"
+    if not metrics_json.exists():
+        sys.exit(f"[run] FAIL: {metrics_json} was not produced (stack did not come up?)")
+    metrics = json.loads(metrics_json.read_text())
+    rmse, samples = metrics["position_rmse"], metrics["samples"]
+    if samples == 0:
+        sys.exit("[run] FAIL: metrics contain no samples (estimator produced no output)")
+    if rmse > limit:
+        sys.exit(f"[run] FAIL: position RMSE {rmse:.3f} m exceeds the {limit:.3f} m limit")
+    print(f"[run] OK: position RMSE {rmse:.3f} m <= {limit:.3f} m ({samples} samples)", flush=True)
 
 
 if __name__ == "__main__":

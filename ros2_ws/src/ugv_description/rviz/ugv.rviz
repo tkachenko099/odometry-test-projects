@@ -32,6 +32,21 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /localization/path
+    - Class: rviz_default_plugins/Path
+      Name: RecordedTrail
+      Enabled: true
+      Color: 0; 200; 0
+      Line Style: Lines
+      Topic:
+        Value: /rth/recorded_path
+    - Class: rviz_default_plugins/Path
+      Name: ReturnPath
+      Enabled: true
+      Color: 0; 120; 255
+      Line Style: Billboards
+      Line Width: 0.1
+      Topic:
+        Value: /rth/return_path
   Tools:
     - Class: rviz_default_plugins/MoveCamera
   Views:

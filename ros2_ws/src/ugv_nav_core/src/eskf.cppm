@@ -3,6 +3,7 @@ module;
 
 #include <Eigen/Dense>
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 export module ugv.nav.core:eskf;
@@ -23,7 +24,11 @@ struct EskfConfig {
     // Initial standard deviations.
     Scalar init_pos_std{1.0};
     Scalar init_vel_std{0.5};
-    Scalar init_att_std{5.0 * math::kDeg2Rad};
+    Scalar init_att_std{5.0 * math::kDeg2Rad};  ///< Roll/pitch (levelling) [rad]
+    /// Heading (rotation about nav-frame Down) [rad]. Position-only GNSS cannot
+    /// observe yaw at rest, so an unknown initial heading must be given an open
+    /// prior here instead of sharing the tight levelling value.
+    Scalar init_yaw_std{5.0 * math::kDeg2Rad};
     Scalar init_ba_std{0.1};
     Scalar init_bg_std{0.01};
 
@@ -48,6 +53,10 @@ public:
         blk(ErrIdx::kPos, cfg_.init_pos_std);
         blk(ErrIdx::kVel, cfg_.init_vel_std);
         blk(ErrIdx::kAtt, cfg_.init_att_std);
+        // The attitude error is expressed in the nav frame (see `inject`), so
+        // its z component is exactly the heading error.
+        const int yaw = static_cast<int>(ErrIdx::kAtt) + 2;
+        P_(yaw, yaw) = cfg_.init_yaw_std * cfg_.init_yaw_std;
         blk(ErrIdx::kBAcc, cfg_.init_ba_std);
         blk(ErrIdx::kBGyro, cfg_.init_bg_std);
         initialised_ = true;
@@ -114,13 +123,63 @@ public:
         const Vec3 fwd = R.col(0);                 // body x-axis in nav frame
         Mat<1, kStateDim> H = Mat<1, kStateDim>::Zero();
         H.block<1, 3>(0, static_cast<int>(ErrIdx::kVel)) = fwd.transpose();
-        H.block<1, 3>(0, static_cast<int>(ErrIdx::kAtt)) =
-            (-fwd.transpose() * math::skew(x_.v));  // d(R e0)·v w.r.t. dphi
+        // h = (R e0)·v with R_true = Exp(dphi) R  =>  dh = dphi·(fwd x v),
+        // i.e. the row (fwd x v)^T = fwd^T [v]x. (The opposite sign steers the
+        // heading *away* from the direction of travel.)
+        H.block<1, 3>(0, static_cast<int>(ErrIdx::kAtt)) = fwd.transpose() * math::skew(x_.v);
         Mat<1, 1> Rm;
         Rm(0, 0) = std_v * std_v;
         Mat<1, 1> innov;
         innov(0, 0) = v_forward - fwd.dot(x_.v);
         applyUpdate<1>(H, innov, Rm);
+    }
+
+    /// Non-holonomic constraint for a wheeled vehicle: the body-frame lateral
+    /// and vertical velocities are (pseudo-)measured as zero.
+    ///
+    /// Forward speed alone constrains heading only to second order (cos of the
+    /// error); the lateral component is first-order (sin), which is what makes
+    /// yaw observable on a straight run with position-only GNSS.
+    void updateNonHolonomic(Scalar std_lateral, Scalar std_vertical) {
+        const Mat3 R = x_.q.toRotationMatrix();
+        Mat<2, kStateDim> H = Mat<2, kStateDim>::Zero();
+        Mat<2, 1> innov;
+        for (int row = 0; row < 2; ++row) {
+            const Vec3 axis = R.col(row + 1);  // body y / z in the nav frame
+            H.block<1, 3>(row, static_cast<int>(ErrIdx::kVel)) = axis.transpose();
+            H.block<1, 3>(row, static_cast<int>(ErrIdx::kAtt)) =
+                axis.transpose() * math::skew(x_.v);
+            innov(row, 0) = -axis.dot(x_.v);
+        }
+        Mat<2, 2> Rm = Mat<2, 2>::Zero();
+        Rm(0, 0) = std_lateral * std_lateral;
+        Rm(1, 1) = std_vertical * std_vertical;
+        applyUpdate<2>(H, innov, Rm);
+    }
+
+    /// Coarse heading alignment from an external source (e.g. GNSS course over
+    /// ground): rotate the attitude about nav-frame Down so that the heading
+    /// becomes `heading`, point the horizontal velocity along it at `speed`,
+    /// and replace the heading uncertainty by `std_heading`.
+    ///
+    /// An EKF cannot pull in a large heading error on its own - the wheel and
+    /// non-holonomic Jacobians are only valid for small errors - so an unknown
+    /// initial heading has to be set this way before those updates are used.
+    void alignHeading(Scalar heading, Scalar speed, Scalar std_heading) noexcept {
+        const Scalar delta = heading - math::quat2euler(x_.q).z();
+        x_.q = (math::expq(Vec3(0.0, 0.0, delta)) * x_.q).normalized();
+        x_.v.x() = speed * std::cos(heading);
+        x_.v.y() = speed * std::sin(heading);
+        const int yaw = static_cast<int>(ErrIdx::kAtt) + 2;
+        P_.row(yaw).setZero();
+        P_.col(yaw).setZero();
+        P_(yaw, yaw) = std_heading * std_heading;
+    }
+
+    /// 1-sigma heading uncertainty [rad].
+    [[nodiscard]] Scalar headingStd() const noexcept {
+        const int yaw = static_cast<int>(ErrIdx::kAtt) + 2;
+        return std::sqrt(P_(yaw, yaw));
     }
 
 private:
@@ -139,10 +198,16 @@ private:
     }
 
     /// Inject an error-state correction into the nominal state.
+    ///
+    /// `F` and `H` above are derived for a *global* (nav-frame) attitude error,
+    /// R_true = Exp(dphi) * R_est, so the correction must be applied on the
+    /// left. (`boxplus` is the body-frame map and is only right for the gyro
+    /// increment in `predict`.)
     void inject(const Mat<kStateDim, 1>& dx) noexcept {
         x_.p += dx.segment<3>(static_cast<int>(ErrIdx::kPos));
         x_.v += dx.segment<3>(static_cast<int>(ErrIdx::kVel));
-        x_.q = math::boxplus(x_.q, dx.segment<3>(static_cast<int>(ErrIdx::kAtt)));
+        const Vec3 dphi = dx.segment<3>(static_cast<int>(ErrIdx::kAtt));
+        x_.q = (math::expq(dphi) * x_.q).normalized();
         x_.accel_bias += dx.segment<3>(static_cast<int>(ErrIdx::kBAcc));
         x_.gyro_bias += dx.segment<3>(static_cast<int>(ErrIdx::kBGyro));
     }

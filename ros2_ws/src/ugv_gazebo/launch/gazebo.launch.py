@@ -8,8 +8,10 @@ from launch.substitutions import (
     Command,
     LaunchConfiguration,
     PathJoinSubstitution,
+    PythonExpression,
 )
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -23,13 +25,23 @@ def generate_launch_description() -> LaunchDescription:
     bridge_config = PathJoinSubstitution([pkg_gazebo, "config", "bridge.yaml"])
     xacro_path = PathJoinSubstitution([pkg_desc, "urdf", "ugv.urdf.xacro"])
 
-    robot_description = {"robot_description": Command(["xacro ", xacro_path])}
+    # The xacro output is a URDF string; without an explicit type launch_ros
+    # tries to parse it as YAML and aborts the whole bring-up.
+    robot_description = {
+        "robot_description": ParameterValue(Command(["xacro ", xacro_path]), value_type=str)
+    }
+
+    # headless:=true runs the server only (no GUI window) with off-screen
+    # rendering, for containers / CI / batch experiments without a display.
+    server_only = PythonExpression(
+        ["' -s --headless-rendering' if '", LaunchConfiguration("headless"), "' == 'true' else ''"]
+    )
 
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([pkg_ros_gz, "launch", "gz_sim.launch.py"])
         ),
-        launch_arguments={"gz_args": [world_path, " -r -v3"]}.items(),
+        launch_arguments={"gz_args": [world_path, " -r -v3", server_only]}.items(),
     )
 
     robot_state_publisher = Node(
@@ -60,6 +72,7 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("world", default_value="ugv_world.sdf"),
+            DeclareLaunchArgument("headless", default_value="false"),
             gz_sim,
             robot_state_publisher,
             spawn,
