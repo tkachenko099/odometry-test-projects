@@ -17,6 +17,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <sensor_msgs/msg/nav_sat_status.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -39,7 +40,7 @@
 namespace ugv::rth {
 
 constexpr double kDeg2Rad = M_PI / 180.0;
-constexpr double kRad2Deg = 180.0 / M_PI;
+[[maybe_unused]] constexpr double kRad2Deg = 180.0 / M_PI;  // MavrosLink only
 constexpr double kEarthR = 6'371'000.0;
 
 [[nodiscard]] inline std::string modeName(api::AutopilotMode m) {
@@ -120,7 +121,78 @@ public:
         clear_ = node_.create_client<mavros_msgs::srv::WaypointClear>("/mavros/mission/clear");
     }
 
+    // MAVLink is asynchronous: a mission upload is a multi-message handshake,
+    // and ArduPilot refuses AUTO until the mission is stored ("No Mission.
+    // Can't set AUTO"). The controller issues GUIDED -> upload -> AUTO back to
+    // back, so the steps are chained here: clear -> push -> any mode change
+    // requested while the upload was in flight.
     void setMode(api::AutopilotMode mode) override {
+        if (uploading_) {
+            deferred_mode_ = mode;  // sent once the mission has been accepted
+            RCLCPP_WARN(node_.get_logger(), "[mavros] SET_MODE -> %s (after mission upload)",
+                        modeName(mode).c_str());
+            return;
+        }
+        sendMode(mode);
+    }
+
+    void uploadReturnPath(std::span<const api::Waypoint> path) override {
+        auto req = std::make_shared<mavros_msgs::srv::WaypointPush::Request>();
+        req->start_index = 0;
+        req->waypoints.reserve(path.size());
+        bool first = true;
+        for (const api::Waypoint& wp : path) {
+            mavros_msgs::msg::Waypoint m;
+            m.frame = mavros_msgs::msg::Waypoint::FRAME_GLOBAL_REL_ALT;
+            m.command = 16;  // MAV_CMD_NAV_WAYPOINT
+            m.is_current = first;
+            m.autocontinue = true;
+            m.x_lat = wp.pos.lat * kRad2Deg;
+            m.y_long = wp.pos.lon * kRad2Deg;
+            m.z_alt = 0.0;  // ground vehicle: relative altitude is irrelevant
+            req->waypoints.push_back(m);
+            first = false;
+        }
+        if (!push_->wait_for_service(std::chrono::milliseconds(200))) {
+            RCLCPP_ERROR(node_.get_logger(), "mavros /mavros/mission/push unavailable");
+            return;
+        }
+        uploading_ = true;
+        deferred_mode_.reset();
+        RCLCPP_WARN(node_.get_logger(), "[mavros] WaypointPush: %zu items",
+                    req->waypoints.size());
+
+        auto push = [this, req]() {
+            (void)push_->async_send_request(
+                req, [this](rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedFuture f) {
+                    const auto res = f.get();
+                    if (res->success) {
+                        RCLCPP_WARN(node_.get_logger(), "[mavros] mission accepted (%u items)",
+                                    res->wp_transfered);
+                    } else {
+                        RCLCPP_ERROR(node_.get_logger(), "[mavros] mission upload REJECTED");
+                    }
+                    uploading_ = false;
+                    if (deferred_mode_) {
+                        const api::AutopilotMode mode = *deferred_mode_;
+                        deferred_mode_.reset();
+                        sendMode(mode);
+                    }
+                });
+        };
+        // Clear first and only then push: sent concurrently, the clear can land
+        // after the upload and wipe the mission it was meant to make room for.
+        if (clear_->wait_for_service(std::chrono::milliseconds(200))) {
+            (void)clear_->async_send_request(
+                std::make_shared<mavros_msgs::srv::WaypointClear::Request>(),
+                [push](rclcpp::Client<mavros_msgs::srv::WaypointClear>::SharedFuture) { push(); });
+        } else {
+            push();
+        }
+    }
+
+private:
+    void sendMode(api::AutopilotMode mode) {
         auto req = std::make_shared<mavros_msgs::srv::SetMode::Request>();
         req->base_mode = 0;
         req->custom_mode = modeName(mode);  // ArduRover mode names
@@ -132,36 +204,8 @@ public:
         RCLCPP_WARN(node_.get_logger(), "[mavros] SET_MODE -> %s", req->custom_mode.c_str());
     }
 
-    void uploadReturnPath(std::span<const api::Waypoint> path) override {
-        if (clear_->wait_for_service(std::chrono::milliseconds(200))) {
-            (void)clear_->async_send_request(
-                std::make_shared<mavros_msgs::srv::WaypointClear::Request>());
-        }
-        auto req = std::make_shared<mavros_msgs::srv::WaypointPush::Request>();
-        req->start_index = 0;
-        req->waypoints.reserve(path.size());
-        bool first = true;
-        for (const api::Waypoint& wp : path) {
-            mavros_msgs::msg::Waypoint m;
-            m.frame = mavros_msgs::msg::Waypoint::FRAME_GLOBAL;
-            m.command = 16;  // MAV_CMD_NAV_WAYPOINT
-            m.is_current = first;
-            m.autocontinue = true;
-            m.x_lat = wp.pos.lat * kRad2Deg;
-            m.y_long = wp.pos.lon * kRad2Deg;
-            m.z_alt = wp.pos.alt;
-            req->waypoints.push_back(m);
-            first = false;
-        }
-        if (!push_->wait_for_service(std::chrono::milliseconds(200))) {
-            RCLCPP_ERROR(node_.get_logger(), "mavros /mavros/mission/push unavailable");
-            return;
-        }
-        (void)push_->async_send_request(req);
-        RCLCPP_WARN(node_.get_logger(), "[mavros] WaypointPush: %zu items", req->waypoints.size());
-    }
-
-private:
+    bool uploading_{false};
+    std::optional<api::AutopilotMode> deferred_mode_;
     rclcpp::Node& node_;
     rclcpp::Client<mavros_msgs::srv::SetMode>::SharedPtr set_mode_;
     rclcpp::Client<mavros_msgs::srv::WaypointPush>::SharedPtr push_;
@@ -210,6 +254,19 @@ public:
                 res->message = "return triggered";
             });
 
+        // kHome is absorbing by design (the vehicle holds at the launch point);
+        // this re-arms the failsafe for the next sortie, with a fresh home.
+        reset_srv_ = create_service<std_srvs::srv::Trigger>(
+            "/rth/reset", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                                 std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+                const auto before = controller_->mode();
+                controller_->reset();
+                logTransition(before);
+                publishState();
+                res->success = true;
+                res->message = "mission reset; recording restarts at the next fix";
+            });
+
         timer_ = create_wall_timer(
             std::chrono::duration<double>(1.0 / std::max(1.0, tick_rate)), [this] { onTick(); });
         RCLCPP_INFO(get_logger(),
@@ -236,6 +293,9 @@ private:
 
     void onPosition(const sensor_msgs::msg::NavSatFix& m) {
         if (std::isnan(m.latitude) || std::isnan(m.longitude)) return;
+        // Before the receiver has a fix mavros/ArduPilot report lat = lon = 0;
+        // recording that would put "home" in the Gulf of Guinea.
+        if (m.status.status < sensor_msgs::msg::NavSatStatus::STATUS_FIX) return;
         const api::GeoPoint p{m.latitude * kDeg2Rad, m.longitude * kDeg2Rad, m.altitude};
         const auto before = controller_->mode();
         controller_->onPosition(p, now_s());
@@ -291,6 +351,7 @@ private:
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_pub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr recorded_pub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr force_srv_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_srv_;
     rclcpp::TimerBase::SharedPtr timer_;
     std::string frame_id_{"map"};
     std::string backend_name_{"ros_bridge"};

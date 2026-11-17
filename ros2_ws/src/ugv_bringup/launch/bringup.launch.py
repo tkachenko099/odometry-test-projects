@@ -36,18 +36,22 @@ def generate_launch_description() -> LaunchDescription:
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([pkg_gazebo, "launch", "gazebo.launch.py"])
-        )
+        ),
+        launch_arguments={"headless": LaunchConfiguration("headless")}.items(),
     )
     fault = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([pkg_fault, "launch", "fault_injector.launch.py"])
         ),
-        launch_arguments={"params_file": scenario}.items(),
+        launch_arguments={"fault_params_file": scenario}.items(),
     )
     localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([pkg_loc, "launch", "localization.launch.py"])
-        )
+        ),
+        # Passed explicitly: launch configurations are global, so relying on the
+        # included file's default would pick up whatever an earlier include set.
+        launch_arguments={"eskf_params_file": LaunchConfiguration("eskf_params_file")}.items(),
     )
 
     commander = Node(
@@ -119,9 +123,14 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("scenario_file", default_value=""),
+            DeclareLaunchArgument(
+                "eskf_params_file",
+                default_value=PathJoinSubstitution([pkg_loc, "config", "eskf.yaml"]),
+            ),
             DeclareLaunchArgument("output_csv", default_value="data.csv"),
             DeclareLaunchArgument("output_json", default_value="metrics.json"),
             DeclareLaunchArgument("rviz", default_value="false"),
+            DeclareLaunchArgument("headless", default_value="false"),
             DeclareLaunchArgument("baseline", default_value="true"),
             DeclareLaunchArgument("return_home", default_value="false"),
             DeclareLaunchArgument("rth_position_topic", default_value="/gps/fix"),

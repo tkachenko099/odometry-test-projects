@@ -10,9 +10,6 @@ namespace ugv::rth::api {
 namespace {
 
 // --- enum / struct conversions (module <-> api). Values are kept identical. ---
-[[nodiscard]] ugv::rth::AutopilotMode toCore(AutopilotMode m) noexcept {
-    return static_cast<ugv::rth::AutopilotMode>(static_cast<std::uint8_t>(m));
-}
 [[nodiscard]] AutopilotMode fromCore(ugv::rth::AutopilotMode m) noexcept {
     return static_cast<AutopilotMode>(static_cast<std::uint8_t>(m));
 }

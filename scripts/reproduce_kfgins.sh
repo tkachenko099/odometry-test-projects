@@ -15,6 +15,7 @@ fi
 echo "[kfgins] configuring & building (Clang + Ninja, Release)..."
 cmake -S "${KFGINS}" -B "${KFGINS}/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 cmake --build "${KFGINS}/build" -j"$(nproc)"
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build the ROS 2 workspace with Clang + Ninja and C++23.
-set -euo pipefail
+# NOTE: ROS setup.bash reads unset variables (AMENT_TRACE_SETUP_FILES), so
+# nounset (`set -u`) must stay off while sourcing it.
+set -eo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source /opt/ros/jazzy/setup.bash

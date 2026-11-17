@@ -14,7 +14,7 @@ namespace {
 
 std::vector<mt::PoseError> makeConstantOffset(int n, const Vec3& offset) {
     std::vector<mt::PoseError> out;
-    out.reserve(n);
+    out.reserve(static_cast<std::size_t>(n));
     for (int i = 0; i < n; ++i) {
         mt::PoseError e;
         e.t = static_cast<double>(i);

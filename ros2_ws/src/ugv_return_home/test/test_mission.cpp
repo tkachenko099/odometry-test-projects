@@ -118,3 +118,32 @@ TEST(Mission, ResetClearsEverything) {
     EXPECT_EQ(ctrl.routeSize(), 0U);
     EXPECT_FALSE(ctrl.hasHome());
 }
+
+TEST(Mission, HomeIsHeldUntilResetThenRearms) {
+    MockLink link;
+    MissionController ctrl{link, makeConfig()};
+    ctrl.onHeartbeat(0.0);
+    ctrl.onPosition(east(0.0), 0.0);
+    ctrl.onPosition(east(10.0), 1.0);
+    ctrl.tick(5.0);  // link lost -> returning
+    ASSERT_EQ(ctrl.mode(), MissionMode::kReturning);
+    ctrl.onPosition(east(1.0), 6.0);
+    ASSERT_EQ(ctrl.mode(), MissionMode::kHome);
+    const std::size_t commands = link.modes.size();
+
+    // HOME is absorbing: neither drifting away nor a late heartbeat restarts
+    // anything, and no further autopilot commands are issued.
+    ctrl.onPosition(east(40.0), 7.0);
+    ctrl.onHeartbeat(8.0);
+    ctrl.tick(20.0);
+    EXPECT_EQ(ctrl.mode(), MissionMode::kHome);
+    EXPECT_EQ(link.modes.size(), commands);
+
+    // An explicit reset re-arms the failsafe with a fresh home.
+    ctrl.reset();
+    EXPECT_EQ(ctrl.mode(), MissionMode::kIdle);
+    ctrl.onHeartbeat(21.0);
+    ctrl.onPosition(east(40.0), 21.0);
+    EXPECT_EQ(ctrl.mode(), MissionMode::kRecording);
+    EXPECT_NEAR(ctrl.distanceToHome(), 0.0, 1e-6);
+}

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import rclpy
 from geometry_msgs.msg import Twist
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
 
@@ -64,10 +65,16 @@ class TrajectoryCommander(Node):
         )
 
     def _on_state(self, msg: String) -> None:
-        if msg.data in ("RETURNING", "HOME") and not self._yielded:
+        failsafe = msg.data in ("RETURNING", "HOME")
+        if failsafe and not self._yielded:
             self._yielded = True
             self._cmd_pub.publish(Twist())  # release with a stop command
             self.get_logger().warn("return-home active: yielding /cmd_vel.")
+        elif not failsafe and self._yielded:
+            # Return aborted (link recovered) or mission reset: take /cmd_vel
+            # back and continue the route from where it was interrupted.
+            self._yielded = False
+            self.get_logger().info("return-home released: resuming the route.")
 
     def _tick(self) -> None:
         if self._yielded:
@@ -96,11 +103,17 @@ def main() -> None:
     node = TrajectoryCommander()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C / launch shutdown: exit cleanly, not with a traceback
+    except Exception:
+        if rclpy.ok():
+            raise  # a real failure; a timer publish racing shutdown is not
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+            rclpy.try_shutdown()
+        except KeyboardInterrupt:
+            pass  # a second Ctrl-C arriving during teardown
 
 
 if __name__ == "__main__":

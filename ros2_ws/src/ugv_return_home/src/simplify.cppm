@@ -2,6 +2,7 @@
 // of the reversed return mission handed to the autopilot.
 module;
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -21,11 +22,19 @@ export namespace ugv::rth {
 inline constexpr std::size_t kDpStackCapacity = kMaxWaypoints + 2U;
 
 /// Iterative (recursion-free, MISRA-friendly) Douglas-Peucker simplification.
-/// Writes the retained vertices in input order into `out`; returns their count.
+/// Writes the retained vertices in input order into `out`.
+///
+/// Returns the number of vertices the tolerance *retains*, which may exceed
+/// `out.capacity()`: in that case `out` holds only the first `capacity()` of
+/// them and the caller must retry with a larger `epsilon` (the return value is
+/// the only signal - `out.size()` saturates silently).
+///
+/// At most `kMaxRoutePoints` input vertices are considered (the recorder's own
+/// capacity); a longer span is truncated to that prefix.
 [[nodiscard]] inline std::size_t douglasPeucker(std::span<const GeoPoint> in, Scalar epsilon,
                                                 StaticVector<GeoPoint, kMaxWaypoints>& out) {
     out.clear();
-    const std::size_t n = in.size();
+    const std::size_t n = std::min(in.size(), kMaxRoutePoints);  // bounds `keep`
     if (n <= 2U) {
         for (std::size_t i = 0U; i < n; ++i) {
             (void)out.push_back(in[i]);
@@ -67,12 +76,14 @@ inline constexpr std::size_t kDpStackCapacity = kMaxWaypoints + 2U;
         }
     }
 
+    std::size_t kept = 0U;
     for (std::size_t i = 0U; i < n; ++i) {
         if (keep[i]) {
-            (void)out.push_back(in[i]);
+            ++kept;
+            (void)out.push_back(in[i]);  // saturates at capacity; `kept` does not
         }
     }
-    return out.size();
+    return kept;
 }
 
 /// Build the return mission: reverse the recorded trail so the vehicle heads
@@ -89,15 +100,27 @@ inline void buildReturnPath(std::span<const GeoPoint> trail, const MissionConfig
     if (cfg.simplify) {
         // Adaptively raise epsilon until the mission fits the autopilot cap.
         Scalar eps = cfg.simplify_epsilon;
-        for (std::size_t attempt = 0U; attempt < 16U; ++attempt) {
-            const std::size_t k = douglasPeucker(trail, eps, kept);
-            if (k <= kMaxWaypoints) {
-                break;
-            }
+        bool fits = false;
+        for (std::size_t attempt = 0U; attempt < 16U && !fits; ++attempt) {
+            fits = douglasPeucker(trail, eps, kept) <= kMaxWaypoints;
             eps *= 1.75;
         }
+        if (!fits) {
+            // Last resort: uniform decimation. Never truncate - a truncated
+            // mission loses the leg nearest the vehicle, i.e. its first target.
+            kept.clear();
+            const std::size_t n = trail.size();
+            for (std::size_t j = 0U; j < kMaxWaypoints; ++j) {
+                (void)kept.push_back(trail[(j * (n - 1U)) / (kMaxWaypoints - 1U)]);
+            }
+        }
     } else {
-        for (std::size_t i = 0U; i < trail.size() && !kept.full(); ++i) {
+        // Unsimplified: stride so that an over-long trail still spans the
+        // whole route (home .. current) instead of being cut short.
+        const std::size_t n = trail.size();
+        const std::size_t m = std::min(n, kMaxWaypoints);
+        for (std::size_t j = 0U; j < m; ++j) {
+            const std::size_t i = (m > 1U) ? (j * (n - 1U)) / (m - 1U) : 0U;
             (void)kept.push_back(trail[i]);
         }
     }

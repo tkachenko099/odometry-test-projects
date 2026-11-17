@@ -26,10 +26,14 @@ sensor streams with configurable noise, bias, outages and wheel slip; a
 and two **Plotly/Dash dashboards** visualise the ideal, raw and corrected
 trajectories together with the supporting infographics.
 
-The headline result: across all tested motion profiles, the estimation
-algorithm reduces position RMSE by **93–98 %** relative to raw inertial
-dead‑reckoning, and maintains bounded error even through multi‑second GNSS
-outages.
+Two results are reported, and they come from two different estimators — they
+must not be conflated:
+
+* the **planar Python EKF** of the interactive simulator reduces position RMSE
+  by **93–98 %** relative to raw inertial dead‑reckoning across the tested
+  motion profiles (§5.1);
+* the **C++ ESKF running in the Gazebo stack** tracks ground truth on the
+  nominal scenario E01 to under 0.1 m horizontally (§5.4).
 
 ---
 
@@ -95,7 +99,7 @@ without breaking ROS interoperability.
 
 * **IMU** — body specific force `[a_forward, a_lateral] = [dv/dt, v·ω]` and
   yaw‑rate `ω`, each augmented with a constant **bias** and Gaussian **noise**.
-* **GNSS** — geodetic fix converted to a local NED/ENU frame, with Gaussian
+* **GNSS** — geodetic fix converted to a local NED frame, with Gaussian
   position noise and configurable **outage** windows.
 * **Wheel odometry** — differential‑drive forward kinematics from joint states.
 
@@ -103,8 +107,23 @@ without breaking ROS interoperability.
 
 The online node runs a **15‑state ESKF** (position, velocity, attitude error,
 accel bias, gyro bias) with IMU‑driven propagation and loosely‑coupled GNSS
-position updates plus optional wheel‑speed updates — the standard KF‑GINS‑style
-architecture.
+position updates plus wheel‑speed and non‑holonomic (zero lateral/vertical body
+velocity) updates — the standard KF‑GINS‑style architecture.
+
+**Frames.** The filter core works in the aerospace convention (NED navigation
+frame, FRD body); ROS uses ENU/FLU (REP‑103). `eskf_node` is the single place
+where they meet: IMU samples are converted FLU→FRD on input, and the state is
+published as an ENU pose with an FLU body twist (REP‑105).
+
+**Attitude error.** The error is a *global* (nav‑frame) rotation vector,
+`R_true = Exp(δφ)·R_est`; `F`, every `H` and the injection all use that one
+convention.
+
+**Heading.** Position‑only GNSS cannot observe yaw at rest. The start heading is
+therefore a parameter (`init_yaw_deg`, `init_yaw_std_deg`); if it is declared
+unknown (σ ≥ 45°) the node runs on IMU + GNSS only until the vehicle has rolled
+`align_distance` metres, then aligns to the GNSS course over ground and enables
+the wheel/NHC updates.
 
 For the interactive simulator (planar, real‑time in the browser) the same design
 is expressed as a compact **8‑state EKF**
@@ -212,9 +231,13 @@ Heartbeat recovery optionally aborts the return (`resume_on_recovery`).
 
 ### Verification
 
-* **22 GoogleTest** cases (`geo`, `route`/`StaticVector`, `simplify`, `link`,
+* **26 GoogleTest** cases (`geo`, `route`/`StaticVector`, `simplify`, `link`,
   `mission`) — including the full failsafe scenario (drive out → link loss → backtrack
-  upload → arrive home), recovery-abort, manual force, and reset.
+  upload → arrive home), recovery-abort, manual force, reset/re-arm, and long
+  trails that exceed the 512‑waypoint mission cap.
+* **5 pytest** cases for the `/cmd_vel` hand‑over (`return_follower`,
+  `trajectory_commander`): the vehicle is stopped on every exit from `RETURNING`
+  and held while the mission is `HOME`.
 * **Deterministic demo** (`rth_demo`): an L-shaped 100 m route recorded as 30
   breadcrumbs is simplified to a **3-waypoint** backtrack; on a 2 s link timeout the
   simulated autopilot returns the vehicle to within **0.0 m** of home. The run is
@@ -229,7 +252,56 @@ Heartbeat recovery optionally aborts the return (`resume_on_recovery`).
   uploads the backtrack mission and `SET_MODE AUTO`, publishing the latched mission on
   `/rth/return_path`. Wired into `ugv_bringup` behind `return_home:=true`.
 * **Hardware-in-the-loop**: `scripts/run_sitl_failsafe.sh` drives the `MavrosLink`
-  backend against ArduPilot SITL over MAVLink (mavros).
+  backend against ArduPilot Rover SITL 4.6.3 over MAVLink (mavros). A scripted
+  operator arms the rover, drives it 163 m out and cuts the heartbeat; the node
+  uploads a 22‑item backtrack mission, the autopilot flies it in `AUTO` and stops
+  1.8 m from the launch point in `HOLD` (single run).
+
+
+### 5.4 C++ ESKF in the Gazebo stack
+
+The numbers in §5.1–5.3 are from the planar Python simulator. The full stack
+(Gazebo Harmonic → fault injector → `eskf_node` → `metrics_node`) is measured
+separately with `./scripts/run_experiment.sh <config> --headless`; see
+`experiments/results/<run>/metrics.json`.
+
+Project image (`ugv-nav-stand:jazzy-harmonic`, Clang 19), headless Gazebo
+Harmonic, 60 s route (≈ 41 m), `eskf.yaml` defaults (map datum set, start
+heading known to 10°), full matrix via `./scripts/run_all_experiments.sh
+--headless --no-bag`. **One run per scenario** — indicative, not a statistical
+result; repeated E01 runs range over 0.24–0.47 m (3‑D).
+
+| Scenario | 3‑D RMSE (m) | Horizontal RMSE (m) | Max error (m) | Yaw RMSE (rad) |
+|---|---:|---:|---:|---:|
+| E01 nominal | 0.47 | 0.17 | 1.61 | 0.028 |
+| E02 GNSS noise, low | 0.33 | 0.17 | 0.75 | 0.071 |
+| E03 GNSS noise, high (σ = 2.5 m) | 1.38 | 0.98 | 3.60 | 0.177 |
+| E04 GNSS outage 10 s | 0.51 | 0.27 | 1.68 | 0.079 |
+| E05 GNSS outage 30 s | 1.06 | 0.86 | 3.79 | 0.213 |
+| E06 GNSS outage 60 s | 3.39 | 3.27 | 8.50 | 0.570 |
+| E07 IMU noise | 0.48 | 0.21 | 1.50 | 0.044 |
+| E08 IMU bias | 0.31 | 0.10 | 0.64 | 0.034 |
+| E09 odometry noise | 0.37 | 0.14 | 0.86 | 0.061 |
+| E10 odometry scale error | 0.67 | 0.47 | 1.22 | 0.087 |
+| E11 wheel slip | 1.06 | 1.00 | 2.12 | 0.153 |
+| E12 GNSS outage + wheel slip | 1.85 | 1.80 | 4.46 | 0.259 |
+
+`metrics.json` reports the 3‑D figure; the horizontal one is computed from
+`data.csv`. On the clean scenarios most of the 3‑D error is the vertical channel
+(see §8). The weak spots are the long outage (E06) and wheel slip (E11, E12):
+during an outage the filter dead‑reckons on wheel speed, and nothing detects
+slip.
+
+Two inputs matter as much as the filter itself:
+
+* **Datum.** Without the `datum` parameter the first GNSS fix becomes the local
+  origin, and its noise becomes a constant offset of the whole track (E03:
+  3.8 m horizontal instead of 1.7 m).
+* **Heading.** With the start heading declared unknown, the node aligns to the
+  GNSS course over ground after 3 m of travel; the estimate before that moment
+  has no meaningful yaw.
+
+CI re‑runs E01 on every push and fails if its position RMSE exceeds 1.0 m.
 
 ---
 
@@ -247,10 +319,17 @@ Heartbeat recovery optionally aborts the return (`resume_on_recovery`).
 
 ## 7. Verification & testing
 
-* **26 GoogleTest** cases in `ugv_nav_core` covering attitude algebra, WGS‑84
-  geodesy conversions, ESKF predict/update, sensor kinematics and metrics.
-* **22 GoogleTest** cases in `ugv_return_home` covering the failsafe module.
-* Full workspace `colcon build` (10 packages) and `colcon test` pass.
+* **29 GoogleTest** cases in `ugv_nav_core` covering attitude algebra, WGS‑84
+  geodesy conversions, ESKF predict/update, sensor kinematics and metrics —
+  including tilt convergence at a non‑trivial heading and heading recovery from
+  motion, which exercise the attitude‑error convention.
+* **26 GoogleTest** cases in `ugv_return_home` covering the failsafe module.
+* **5 pytest** cases in `ugv_bringup` (`/cmd_vel` hand‑over) and **7** in
+  `ugv_dashboard` (planar simulator).
+* Full workspace `colcon build` (10 packages, `-Wall -Wextra -Wpedantic -Wshadow
+  -Wconversion`, warnings as errors in CI) and `colcon test` pass.
+* **CI** (`.github/workflows/ci.yml`): script syntax, build, unit tests and a
+  headless Gazebo run of E01 with an RMSE gate.
 * Interactive simulator numerics assert **corrected RMSE < raw RMSE** for every
   route shape; Ruff‑clean Python.
 * Dashboards validated to boot and serve a valid callback dependency graph.
@@ -267,11 +346,18 @@ Heartbeat recovery optionally aborts the return (`resume_on_recovery`).
   adaptive noise are deferred as planned.
 * **Quantitative KF‑GINS cross‑check** — currently a reproduction script; a
   numeric A/B against the reference dataset is a natural next milestone.
-* **Real MAVLink backend** — implemented (`MavrosLink`) and integrated via
-  `scripts/run_sitl_failsafe.sh`; a full ArduPilot SITL soak test depends on the host
-  having `sim_vehicle.py` (the image now ships mavros), and closing the loop so the
-  Gazebo vehicle physically drives the backtrack (rather than only visualising it) is a
-  follow-up.
+* **Real MAVLink backend** — verified against ArduPilot SITL only (one scenario,
+  one run); not tested on autopilot hardware, and the SITL test is not part of CI
+  (the ArduPilot image is too heavy for it).
+* **Return follower uses ground truth** — in the Gazebo stack the backtrack is
+  driven by `return_follower` on `/ground_truth/odom`, not on the ESKF estimate.
+* **Vertical channel** — the diff‑drive chassis pitches up to ~0.2 rad under
+  drive torque, so the body‑frame vertical constraint is deliberately loose
+  (`nhc_vertical_std`); height is the least accurate axis.
+* **Single‑run matrix** — §5.4 is one run per scenario; no confidence intervals.
+* **No slip detection / long outages** — E06, E11 and E12 degrade to metres.
+* **GNSS lever arm** — the antenna sits 0.10 m behind the body origin and the
+  offset is not modelled.
 
 ---
 
@@ -279,10 +365,12 @@ Heartbeat recovery optionally aborts the return (`resume_on_recovery`).
 
 NavStand delivers a reproducible, end‑to‑end stand for GRC navigation research:
 modern C++23 estimation, a physics‑backed simulation, deterministic fault
-injection, automatic metrics and interactive visualisation. The estimator
-consistently converts diverging inertial dead‑reckoning into sub‑metre,
-outage‑robust navigation (93–98 % RMSE reduction), providing a solid classical
-baseline for the machine‑learning extensions planned in Stage 2.
+injection, automatic metrics and interactive visualisation. In the planar
+simulator the EKF converts diverging inertial dead‑reckoning into bounded,
+outage‑robust navigation (93–98 % RMSE reduction, §5.1); in the Gazebo stack the
+C++ ESKF holds the nominal route to under 0.1 m horizontally (§5.4). Together they give
+a solid classical baseline for the machine‑learning extensions planned in
+Stage 2.
 
 ---
 

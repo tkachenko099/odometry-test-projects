@@ -12,10 +12,10 @@ def generate_launch_description() -> LaunchDescription:
     default_params = str(
         Path(get_package_share_directory("ugv_return_home")) / "config" / "rth.yaml"
     )
-    params_file = LaunchConfiguration("params_file")
+    params_file = LaunchConfiguration("rth_params_file")
     return LaunchDescription(
         [
-            DeclareLaunchArgument("params_file", default_value=default_params),
+            DeclareLaunchArgument("rth_params_file", default_value=default_params),
             Node(
                 package="ugv_return_home",
                 executable="rth_node",

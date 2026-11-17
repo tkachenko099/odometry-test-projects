@@ -8,7 +8,7 @@ from launch_ros.actions import Node
 
 
 def _spawn(context, *_, **__):
-    params_file = LaunchConfiguration("params_file").perform(context)
+    params_file = LaunchConfiguration("fault_params_file").perform(context)
     return [
         Node(
             package="ugv_fault_injector",
@@ -23,7 +23,7 @@ def _spawn(context, *_, **__):
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
-            DeclareLaunchArgument("params_file", default_value=""),
+            DeclareLaunchArgument("fault_params_file", default_value=""),
             OpaqueFunction(function=_spawn),
         ]
     )

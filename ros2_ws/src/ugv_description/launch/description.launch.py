@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -14,7 +15,8 @@ def generate_launch_description() -> LaunchDescription:
         [FindPackageShare("ugv_description"), "urdf", "ugv.urdf.xacro"]
     )
     robot_description = {
-        "robot_description": Command(["xacro ", xacro_path]),
+        # Explicit str: launch_ros would otherwise parse the URDF as YAML.
+        "robot_description": ParameterValue(Command(["xacro ", xacro_path]), value_type=str),
         "use_sim_time": use_sim_time,
     }
 

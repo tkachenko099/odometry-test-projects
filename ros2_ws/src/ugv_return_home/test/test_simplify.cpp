@@ -62,3 +62,66 @@ TEST(Simplify, EmptyTrailYieldsEmptyMission) {
     buildReturnPath(trail, cfg, out);
     EXPECT_TRUE(out.empty());
 }
+
+// --- Long-route regressions -------------------------------------------------
+namespace {
+/// A zig-zag trail: every vertex is a 5 m corner, so no reasonable tolerance
+/// collapses it and Douglas-Peucker wants to keep (almost) all of it.
+std::vector<GeoPoint> zigzag(std::size_t n) {
+    std::vector<GeoPoint> trail;
+    trail.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        trail.push_back(at((i % 2U == 0U) ? 0.0 : 5.0, static_cast<Scalar>(i)));
+    }
+    return trail;
+}
+bool same(const GeoPoint& a, const GeoPoint& b) noexcept {
+    return std::abs(a.lat - b.lat) < 1e-12 && std::abs(a.lon - b.lon) < 1e-12;
+}
+}  // namespace
+
+TEST(Simplify, ReportsRetainedCountBeyondOutputCapacity) {
+    const auto trail = zigzag(4000);
+    StaticVector<GeoPoint, kMaxWaypoints> out;
+    const std::size_t k = douglasPeucker(trail, 0.75, out);
+    // The return value must expose the overflow; `out` itself just saturates.
+    EXPECT_GT(k, kMaxWaypoints);
+    EXPECT_EQ(out.size(), kMaxWaypoints);
+}
+
+TEST(Simplify, LongTrailFitsCapWithoutLosingEitherEnd) {
+    const auto trail = zigzag(8000);
+    MissionConfig cfg;  // simplify = true, epsilon = 0.75 m
+    StaticVector<Waypoint, kMaxWaypoints> out;
+    buildReturnPath(trail, cfg, out);
+    ASSERT_GE(out.size(), 2U);
+    ASSERT_LE(out.size(), kMaxWaypoints);
+    // seq 0 must be where the vehicle is *now*, the last item must be home.
+    EXPECT_TRUE(same(out.front().pos, trail.back()));
+    EXPECT_TRUE(same(out.back().pos, trail.front()));
+    EXPECT_EQ(out.front().seq, 0U);
+    EXPECT_EQ(out.back().seq, out.size() - 1U);
+}
+
+TEST(Simplify, UnsimplifiedLongTrailStillSpansTheRoute) {
+    const auto trail = zigzag(3000);
+    MissionConfig cfg;
+    cfg.simplify = false;
+    StaticVector<Waypoint, kMaxWaypoints> out;
+    buildReturnPath(trail, cfg, out);
+    ASSERT_EQ(out.size(), kMaxWaypoints);
+    EXPECT_TRUE(same(out.front().pos, trail.back()));
+    EXPECT_TRUE(same(out.back().pos, trail.front()));
+}
+
+TEST(Simplify, OversizedSpanIsBoundedNotOverrun) {
+    // More vertices than the internal `keep` bitmap: must clamp, not write
+    // past it (caught as a stack-buffer-overflow under ASan before the fix).
+    const auto trail = zigzag(kMaxRoutePoints + 800U);
+    StaticVector<GeoPoint, kMaxWaypoints> out;
+    const std::size_t k = douglasPeucker(trail, 1.0e9, out);
+    EXPECT_EQ(k, 2U);
+    ASSERT_EQ(out.size(), 2U);
+    EXPECT_TRUE(same(out.front(), trail.front()));
+    EXPECT_TRUE(same(out.back(), trail[kMaxRoutePoints - 1U]));
+}

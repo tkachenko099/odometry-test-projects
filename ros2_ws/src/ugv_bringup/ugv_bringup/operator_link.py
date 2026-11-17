@@ -9,6 +9,7 @@ many seconds to simulate a loss of communication, which trips the
 from __future__ import annotations
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Empty
 
@@ -48,11 +49,17 @@ def main() -> None:
     node = OperatorLink()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C / launch shutdown: exit cleanly, not with a traceback
+    except Exception:
+        if rclpy.ok():
+            raise  # a real failure; a timer publish racing shutdown is not
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+            rclpy.try_shutdown()
+        except KeyboardInterrupt:
+            pass  # a second Ctrl-C arriving during teardown
 
 
 if __name__ == "__main__":

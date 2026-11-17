@@ -138,6 +138,11 @@ ENV CC=clang \
     GZ_SIM_RESOURCE_PATH=/workspace/ros2_ws/install/share \
     PATH="/opt/venv/bin:${PATH}"
 
+# Pre-create the volume mount points owned by the dev user, so fresh named
+# volumes inherit that ownership (the entrypoint repairs pre-existing ones).
+RUN mkdir -p /workspace/ros2_ws/build /home/${USERNAME}/.cache \
+    && chown -R ${USER_UID}:${USER_GID} /workspace /home/${USERNAME}/.cache
+
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

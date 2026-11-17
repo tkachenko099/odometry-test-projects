@@ -18,6 +18,7 @@ namespace {
     c.init_pos_std = p.init_pos_std;
     c.init_vel_std = p.init_vel_std;
     c.init_att_std = p.init_att_std_deg * math::kDeg2Rad;
+    c.init_yaw_std = p.init_yaw_std_deg * math::kDeg2Rad;
     c.init_ba_std = p.init_ba_std;
     c.init_bg_std = p.init_bg_std;
     c.gravity = p.gravity;
@@ -61,6 +62,16 @@ void Eskf::updateGnssNed(const Vec3& p_ned, const Vec3& std_ned) {
 void Eskf::updateWheelSpeed(Scalar v_forward, Scalar std_v) {
     impl_->filter.updateWheelSpeed(v_forward, std_v);
 }
+
+void Eskf::updateNonHolonomic(Scalar std_lateral, Scalar std_vertical) {
+    impl_->filter.updateNonHolonomic(std_lateral, std_vertical);
+}
+
+void Eskf::alignHeading(Scalar heading, Scalar speed, Scalar std_heading) {
+    impl_->filter.alignHeading(heading, speed, std_heading);
+}
+
+Scalar Eskf::headingStd() const { return impl_->filter.headingStd(); }
 
 NavState Eskf::state() const { return fromCore(impl_->filter.state()); }
 

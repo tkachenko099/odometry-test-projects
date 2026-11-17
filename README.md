@@ -16,7 +16,7 @@ navigation metrics automatically and renders them in a **Plotly/Dash dashboard**
 - **Modern C++ core** (`ugv_nav_core`): C++23 **named modules** (`ugv.nav.core` with
   `:types`, `:math`, `:sensors`, `:eskf`, `:metrics` partitions), concepts, ranges,
   `std::span`, `std::numbers`, RAII/OOP — compiled with **Clang 19 + Ninja**.
-- **GoogleTest** suite (26 cases) covering SO(3)/quaternion algebra, WGS-84 geodesy,
+- **GoogleTest** suite (29 cases) covering SO(3)/quaternion algebra, WGS-84 geodesy,
   wheel odometry, the ESKF (IMU propagation + GNSS/wheel updates, covariance PSD) and
   the metrics (RMSE/ATE/RPE/drift).
 - **ROS 2 Jazzy** packages for simulation, sensor fault injection, estimation,
@@ -103,7 +103,7 @@ source ros2_ws/install/setup.bash
 
 ```bash
 cd ros2_ws
-colcon test --packages-select ugv_nav_core --event-handlers console_direct+
+colcon test --event-handlers console_direct+     # C++ (GoogleTest) + Python (pytest)
 colcon test-result --verbose
 ```
 
@@ -169,7 +169,7 @@ mission (`MISSION_COUNT` + `MISSION_ITEM_INT`) after switching mode (`SET_MODE`)
 Built with the same principles as the core: a **C++23 named module** (`ugv.rth`) with
 an **ABI-stable facade** (`ugv::rth::api`), a **MISRA-friendly** control path (bounded
 static storage, no dynamic allocation, no exceptions, strong `enum class`, `noexcept`
-queries), and **GoogleTest** coverage (22 tests).
+queries), and **GoogleTest** coverage (26 tests).
 
 ```bash
 # Standalone deterministic demo (no ROS/Gazebo): drive an L-route, drop the link,
@@ -180,13 +180,15 @@ ros2 run ugv_return_home rth_demo
 ros2 launch ugv_return_home rth.launch.py
 ros2 topic pub -r 2 /operator/heartbeat std_msgs/msg/Empty {}   # heartbeat; stop it to trigger
 ros2 service call /rth/force std_srvs/srv/Trigger {}             # or force a manual return
+ros2 service call /rth/reset std_srvs/srv/Trigger {}             # re-arm after HOME (new home at next fix)
 
 # Inside the full Gazebo stack (records /gps/fix, drops the link at t=30s) — the
 # robot physically drives itself home when the link is lost:
 ros2 launch ugv_bringup bringup.launch.py return_home:=true rviz:=true rth_drop_after:=30.0
 
-# Hardware-in-the-loop against ArduPilot SITL + mavros (real MAVLink):
-./scripts/run_sitl_failsafe.sh 25
+# Hardware-in-the-loop against ArduPilot SITL + mavros (real MAVLink); needs the
+# add-on image: docker compose build dev sitl && docker compose run --rm sitl bash
+./scripts/run_sitl_failsafe.sh 25    # arms, drives out, drops the link; exit 0 = came home
 
 # Route + metrics figure from the standalone demo (no ROS needed):
 ./scripts/rth_report.sh docs/rth_metrics.png

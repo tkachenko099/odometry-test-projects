@@ -4,7 +4,12 @@
 While the ``ugv_return_home`` failsafe is ``RETURNING``, this node steers the
 robot along the published backtrack path (``/rth/return_path``) by commanding
 ``/cmd_vel``, closing the loop so the simulated vehicle physically drives home.
-It yields control (stops) once the mission reaches ``HOME``.
+
+Stopping is tied to the mission state, not to this node's own goal tolerance:
+the ``MissionController`` decides arrival (its ``arrival_radius`` usually trips
+first), and Gazebo's DiffDrive keeps executing the last ``/cmd_vel`` forever.
+So a zero ``Twist`` is sent on *every* exit from ``RETURNING`` and is held for
+as long as the mission reports ``HOME`` (the autopilot's HOLD).
 
 Pose is taken from ground-truth odometry (same metric frame as the ENU path,
 whose origin is the launch point). A classic pure-pursuit controller selects a
@@ -17,6 +22,7 @@ import math
 import rclpy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, Path
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import String
 
@@ -72,12 +78,18 @@ class ReturnFollower(Node):
         self._done = False
 
     def _on_state(self, msg: String) -> None:
-        if msg.data != self._state:
-            self._state = msg.data
-            if self._state == "RETURNING":
-                self._target = 0
-                self._done = False
-                self.get_logger().warn("taking over /cmd_vel: driving backtrack home.")
+        if msg.data == self._state:
+            return
+        previous, self._state = self._state, msg.data
+        if self._state == "RETURNING":
+            self._target = 0
+            self._done = False
+            self.get_logger().warn("taking over /cmd_vel: driving backtrack home.")
+        elif previous == "RETURNING":
+            # Arrived (HOME), aborted (RECORDING) or reset (IDLE): never leave
+            # the last pursuit command latched in the drive.
+            self._stop()
+            self.get_logger().info(f"return ended ({self._state}); stopped the vehicle.")
 
     def _on_odom(self, msg: Odometry) -> None:
         p = msg.pose.pose.position
@@ -86,14 +98,20 @@ class ReturnFollower(Node):
 
     # --- Control loop -------------------------------------------------------
     def _control(self) -> None:
-        if self._state != "RETURNING" or self._done or not self._path or self._pose is None:
+        if self._state == "HOME":
+            self._stop()  # hold at the launch point until the mission is reset
+            return
+        if self._state != "RETURNING":
+            return  # someone else owns /cmd_vel
+        if self._done or not self._path or self._pose is None:
+            self._stop()  # returning but nothing to follow (yet): stand still
             return
         x, y, yaw = self._pose
         gx, gy = self._path[-1]
         if math.hypot(gx - x, gy - y) <= self._goal_tol:
             self._stop()
             self._done = True
-            self.get_logger().info("reached home; releasing /cmd_vel.")
+            self.get_logger().info("reached the end of the backtrack path; holding.")
             return
 
         # Advance the look-ahead target past points already within reach.
@@ -122,11 +140,17 @@ def main() -> None:
     node = ReturnFollower()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C / launch shutdown: exit cleanly, not with a traceback
+    except Exception:
+        if rclpy.ok():
+            raise  # a real failure; a timer publish racing shutdown is not
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+            rclpy.try_shutdown()
+        except KeyboardInterrupt:
+            pass  # a second Ctrl-C arriving during teardown
 
 
 if __name__ == "__main__":

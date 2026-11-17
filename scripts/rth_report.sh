@@ -13,7 +13,12 @@ trap 'rm -f "${RUN_JSON}"' EXIT
 # Locate the rth_demo binary (installed or built).
 DEMO="$(command -v rth_demo || true)"
 if [[ -z "${DEMO}" ]]; then
-    DEMO="$(find "${REPO_ROOT}/ros2_ws" -type f -name rth_demo -path '*install*' 2>/dev/null | head -n1)"
+    # --symlink-install leaves a symlink in install/, so do not filter on -type f.
+    for candidate in \
+        "${REPO_ROOT}/ros2_ws/install/ugv_return_home/lib/ugv_return_home/rth_demo" \
+        "${REPO_ROOT}/ros2_ws/build/ugv_return_home/rth_demo"; do
+        if [[ -x "${candidate}" ]]; then DEMO="${candidate}"; break; fi
+    done
 fi
 if [[ -z "${DEMO}" ]]; then
     echo "rth_demo not found; build ugv_return_home first (colcon build)." >&2
